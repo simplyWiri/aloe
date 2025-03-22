@@ -1,5 +1,5 @@
 #include <aloe/core/Device.h>
-
+#include <aloe/util/log.h>
 
 namespace aloe {
 
@@ -61,6 +61,15 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
 
     result = vkCreateInstance( &instance_info, nullptr, &device.instance_ );
     if ( result == VK_SUCCESS ) { volkLoadInstance( device.instance_ ); }
+
+    log_write( LogLevel::Trace,
+               "Successfully loaded Volk & created Vulkan instance, validation is {:s}, using instance layers: {}, "
+               "and api version {}.{}.{}",
+               settings.enable_validation ? "enabled" : "disabled",
+               instance_extensions,
+               VK_API_VERSION_MAJOR( app_info.apiVersion ),
+               VK_API_VERSION_MINOR( app_info.apiVersion ),
+               VK_API_VERSION_PATCH( app_info.apiVersion ) );
 
     return result;
 }
