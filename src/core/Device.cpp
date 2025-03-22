@@ -1,5 +1,8 @@
+#include <ranges>
+
 #include <aloe/core/Device.h>
 #include <aloe/util/log.h>
+#include <aloe/util/vulkan_util.h>
 
 namespace aloe {
 
@@ -9,6 +12,9 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
 
     // Initialize volk, create our VkInstance
     auto result = create_instance( *device, settings );
+    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+
+    result = pick_physical_device( *device, settings );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
 
     return device;
@@ -72,6 +78,85 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
                VK_API_VERSION_PATCH( app_info.apiVersion ) );
 
     return result;
+}
+
+VkResult Device::pick_physical_device( Device& device, const DeviceSettings& settings ) {
+    // Retrieve all available physical devices
+    auto physical_devices = get_enumerated_value<VkPhysicalDevice>(
+        [&]( uint32_t* count, VkPhysicalDevice* devices ) {
+            vkEnumeratePhysicalDevices( device.instance_, count, devices );
+        },
+        "Failed to enumerate Vulkan physical devices." );
+
+    // Check each physical device for compatibility
+    for ( const auto physical_device : physical_devices ) {
+        auto& wrapper = device.physical_devices_.emplace_back( physical_device );
+
+        // Gather features and properties of the current physical device
+        vkGetPhysicalDeviceProperties( physical_device, &wrapper.props );
+        vkGetPhysicalDeviceFeatures( physical_device, &wrapper.features );
+        vkGetPhysicalDeviceMemoryProperties( physical_device, &wrapper.mem_properties );
+        wrapper.queue_families = get_enumerated_value<VkQueueFamilyProperties>(
+            [&]( uint32_t* count, VkQueueFamilyProperties* props ) {
+                vkGetPhysicalDeviceQueueFamilyProperties( physical_device, count, props );
+            },
+            "Failed to enumerate physical device queue families" );
+
+        uint64_t total_memory = 0;
+        for ( uint32_t j = 0; j < wrapper.mem_properties.memoryHeapCount; ++j ) {
+            if ( wrapper.mem_properties.memoryHeaps[j].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ) {
+                total_memory += wrapper.mem_properties.memoryHeaps[j].size;
+            }
+        }
+
+        auto extensions = get_enumerated_value<VkExtensionProperties>(
+                              [&]( uint32_t* count, VkExtensionProperties* props ) {
+                                  vkEnumerateDeviceExtensionProperties( physical_device, nullptr, count, props );
+                              },
+                              "Failed to enumerate physical device extensions" ) |
+            std::views::transform( []( auto& e ) { return e.extensionName; } );
+
+        auto queue_families = wrapper.queue_families | std::views::transform( []( auto& q ) {
+                                  std::vector<const char*> qt;
+                                  if ( q.queueFlags & VK_QUEUE_GRAPHICS_BIT ) { qt.emplace_back( "Graphics" ); }
+                                  if ( q.queueFlags & VK_QUEUE_COMPUTE_BIT ) { qt.emplace_back( "Compute" ); }
+                                  if ( q.queueFlags & VK_QUEUE_TRANSFER_BIT ) { qt.emplace_back( "Transfer" ); }
+                                  return std::format( "{:d} ({:n:})", q.queueCount, qt );
+                              } );
+
+        log_write( LogLevel::Info, "Physical device: '{}'", std::string{ wrapper.props.deviceName } );
+        log_write( LogLevel::Info,
+                   "- Device Type: {}",
+                   wrapper.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete GPU"
+                                                                                    : "Integrated GPU" );
+        log_write( LogLevel::Info,
+                   "- API Version: {}.{}.{}",
+                   VK_VERSION_MAJOR( wrapper.props.apiVersion ),
+                   VK_VERSION_MINOR( wrapper.props.apiVersion ),
+                   VK_VERSION_PATCH( wrapper.props.apiVersion ) );
+        log_write( LogLevel::Info,
+                   "- Driver Version: {}.{}.{}",
+                   VK_VERSION_MAJOR( wrapper.props.driverVersion ),
+                   VK_VERSION_MINOR( wrapper.props.driverVersion ),
+                   VK_VERSION_PATCH( wrapper.props.driverVersion ) );
+
+        log_write( LogLevel::Info, "- Total Device Memory: {} MB", total_memory / ( 1024 * 1024 ) );
+        log_write( LogLevel::Trace, "- Queue Families: {}", queue_families );
+        log_write( LogLevel::Trace, "- Supported Extensions: {}", extensions );
+
+
+        for ( const auto& extension : settings.device_extensions ) {
+            if ( std::ranges::find( extensions, std::string{ extension } ) == extensions.end() ) {
+                log_write( LogLevel::Error, "Failed to find required extension: {}", extension );
+                wrapper.viable_device = false;
+            }
+        }
+    }
+
+    // todo: Eventually we can sort physical devices by capabilities here, but for now I only ever run single-gpu
+    // setups, so this is irrelevant.
+
+    return device.physical_devices_.front().viable_device ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
 }
 
 VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
