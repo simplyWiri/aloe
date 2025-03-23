@@ -219,9 +219,26 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
     return vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
 }
 
+constexpr LogLevel to_log_level( VkDebugUtilsMessageSeverityFlagBitsEXT severity ) {
+    switch ( severity ) {
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: return LogLevel::Trace;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: return LogLevel::Info;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: return LogLevel::Warn;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: return LogLevel::Error;
+        default: return LogLevel::None;
+    }
+}
+
+constexpr std::string_view to_string( VkDebugUtilsMessageTypeFlagsEXT type ) {
+    if ( type & VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT ) return "General";
+    if ( type & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT ) return "Validation";
+    if ( type & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT ) return "Performance";
+    return "UNKNOWN";
+}
+
 VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-                                 VkDebugUtilsMessageTypeFlagsEXT,
-                                 const VkDebugUtilsMessengerCallbackDataEXT*,
+                                 VkDebugUtilsMessageTypeFlagsEXT message_type,
+                                 const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
                                  void* user_info ) {
     auto& debug_info = static_cast<Device*>( user_info )->debug_info_;
 
@@ -232,6 +249,11 @@ VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: ++debug_info.num_info_; break;
         default: ++debug_info.num_unknown_; break;
     }
+
+    log_write( to_log_level( message_severity ),
+               "[Validation Layer - {}]: {}",
+               to_string( message_type ),
+               callback_data ? callback_data->pMessage : "unknown error" );
 
     return VK_FALSE;
 }
