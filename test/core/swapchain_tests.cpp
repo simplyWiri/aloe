@@ -19,6 +19,9 @@ protected:
 };
 
 TEST_F( SwapchainTestFixture, SwapchainInitialization ) {
-    auto swapchain = aloe::Swapchain::create_swapchain( *device_ );
+    auto swapchain = aloe::Swapchain::create_swapchain( *device_, {} );
     EXPECT_TRUE( swapchain.has_value() );
+
+    EXPECT_EQ(device_->debug_info().num_warning_, 0);
+    EXPECT_EQ(device_->debug_info().num_error_, 0);
 }

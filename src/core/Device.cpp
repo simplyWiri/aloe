@@ -1,6 +1,8 @@
 #include <numeric>
 #include <ranges>
 
+#include <GLFW/glfw3.h>
+
 #include <aloe/core/Device.h>
 #include <aloe/util/log.h>
 #include <aloe/util/vulkan_util.h>
@@ -45,16 +47,22 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
 
     constexpr std::array validation_layers = { "VK_LAYER_KHRONOS_validation" };
     std::vector instance_extensions = {
-        VK_KHR_SURFACE_EXTENSION_NAME,
-        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
 
-    // If we are running without a screen, we do not need any swapchain extensions
-    if ( settings.headless ) {
-        instance_extensions.erase( instance_extensions.begin(), instance_extensions.begin() + 2 );
+    // If we are running without a screen, we do not need any swapchain extensions, nor GLFW
+    if ( !settings.headless ) {
+        // We (try) initialize GLFW to create our instance
+        if ( glfwInit() == GLFW_FALSE ) return VkResult::VK_ERROR_INITIALIZATION_FAILED;
+
+
+        uint32_t count = 0;
+        auto** glfw_exts = glfwGetRequiredInstanceExtensions( &count );
+
+        instance_extensions.insert( instance_extensions.end(), glfw_exts, glfw_exts + count );
+        instance_extensions.emplace_back( VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME );
     }
 
     VkInstanceCreateInfo instance_info{ .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
