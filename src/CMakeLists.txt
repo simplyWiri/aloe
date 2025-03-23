@@ -17,9 +17,12 @@ endfunction()
 aloe_add_library(aloe
     HEADERS
         core/Device.h
+        core/Swapchain.h
     SOURCES
         core/Device.cpp
+        core/Swapchain.cpp
         LINK_AGAINST
+        glfw
         volk
         tl::expected
 )

@@ -4,11 +4,11 @@
 
 class DeviceTestsFixture : public ::testing::Test {
 protected:
-    std::shared_ptr<aloe::MockLogger> mock_logger;
+    std::shared_ptr<aloe::MockLogger> mock_logger_;
 
     void SetUp() override {
-        mock_logger = std::make_shared<aloe::MockLogger>();
-        aloe::set_logger( mock_logger );
+        mock_logger_ = std::make_shared<aloe::MockLogger>();
+        aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Trace );
     }
 };

@@ -7,3 +7,6 @@
 [submodule "externals/expected"]
 	path = externals/expected
 	url = https://github.com/TartanLlama/expected.git
+[submodule "externals/glfw"]
+	path = externals/glfw
+	url = https://github.com/glfw/glfw.git

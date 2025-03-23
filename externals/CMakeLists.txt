@@ -7,6 +7,9 @@ add_subdirectory(expected EXCLUDE_FROM_ALL)
 message("++++++ Volk (Meta loader for Vulkan functions)")
 add_subdirectory(volk EXCLUDE_FROM_ALL)
 
+message("++++++ GFLW (Cross platformw window management)")
+add_subdirectory(glfw EXCLUDE_FROM_ALL)
+
 # If we are running tests, include gtest/gmock
 if (ALOE_ENABLE_TESTS)
     message("++++++ GoogleTest and GoogleMock (Testing Frameworks)")
