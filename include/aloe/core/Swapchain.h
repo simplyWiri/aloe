@@ -16,6 +16,9 @@ struct SwapchainSettings {
     const char* title = "Aloe Window";
     int width = 1920;
     int height = 1080;
+
+    // Use a HDR format
+    bool use_hdr_surface = true;
 };
 
 // An abstraction which managers the window, input, surface & swapchain for Vulkan
@@ -25,13 +28,19 @@ class Swapchain {
     constexpr static VkSurfaceFormatKHR sdr_target = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 
     const Device& device_;
+    bool use_hdr_{ false };
     GLFWwindow* window_{ nullptr };
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
 
     // Surface capabilities
-    VkSurfaceCapabilitiesKHR capabilities_;
+    VkSurfaceCapabilitiesKHR capabilities_{};
     std::vector<VkSurfaceFormatKHR> formats_;
     std::vector<VkPresentModeKHR> present_modes_;
+    bool hdr_supported_ = false;
+
+    VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+    std::vector<VkImage> images_;
+    std::vector<VkImageView> image_views_;
 
 public:
     static tl::expected<std::unique_ptr<Swapchain>, VkResult> create_swapchain( const Device& device,
@@ -39,8 +48,9 @@ public:
     ~Swapchain();
 
 protected:
-    void resize( int new_width, int new_height );
+    void resize();
     VkResult load_surface_capabilities();
+    VkResult build_swapchain();
 
 private:
     // Internal helpers for construction
