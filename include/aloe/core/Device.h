@@ -15,15 +15,17 @@ struct DeviceSettings {
 
     bool enable_validation = true;
 
-    std::array<const char*, 9> device_extensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-                                                     VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-                                                     VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
-                                                     VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
-                                                     VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-                                                     VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-                                                     VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
-                                                     VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
-                                                     VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME };
+    std::array<const char*, 9> device_extensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+        VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+        VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+        VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME,
+    };
 };
 
 class Device {
@@ -53,6 +55,7 @@ private:
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     DebugInformation debug_info_;
     std::vector<PhysicalDevice> physical_devices_;
+    VkDevice device_ = VK_NULL_HANDLE;
 
 public:
     // Attempt to construct a new device
@@ -65,6 +68,7 @@ public:
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
     static VkResult pick_physical_device( Device& device, const DeviceSettings& settings );
+    static VkResult create_logical_device( Device& device, const DeviceSettings& settings );
     static VkBool32 debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                                     VkDebugUtilsMessageTypeFlagsEXT message_type,
                                     const VkDebugUtilsMessengerCallbackDataEXT* callback_data,

@@ -1,3 +1,4 @@
+#include <numeric>
 #include <ranges>
 
 #include <aloe/core/Device.h>
@@ -17,6 +18,9 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
     result = pick_physical_device( *device, settings );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
 
+    result = create_logical_device( *device, settings );
+    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+
     return device;
 }
 
@@ -25,12 +29,14 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
     auto result = volkInitialize();
     if ( result != VK_SUCCESS ) return result;
 
-    VkApplicationInfo app_info{ .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                                .pApplicationName = settings.name,
-                                .applicationVersion = settings.version,
-                                .pEngineName = "aloe",
-                                .engineVersion = VK_MAKE_VERSION( 1, 0, 0 ),
-                                .apiVersion = VK_API_VERSION_1_2 };
+    VkApplicationInfo app_info{
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = settings.name,
+        .applicationVersion = settings.version,
+        .pEngineName = "aloe",
+        .engineVersion = VK_MAKE_VERSION( 1, 0, 0 ),
+        .apiVersion = VK_API_VERSION_1_2,
+    };
 
     constexpr std::array validation_layers = { "VK_LAYER_KHRONOS_validation" };
     constexpr std::array instance_extensions = {
@@ -159,6 +165,60 @@ VkResult Device::pick_physical_device( Device& device, const DeviceSettings& set
     return device.physical_devices_.front().viable_device ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
 }
 
+VkResult Device::create_logical_device( Device& device, const DeviceSettings& settings ) {
+    const auto& physical_device = device.physical_devices_.front();
+
+    const float priority = 1.0f;
+    auto queue_infos = std::views::iota( 0 ) | std::views::take( physical_device.queue_families.size() ) |
+        std::views::transform( [&]( auto index ) {
+                           return VkDeviceQueueCreateInfo{
+                               .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                               .queueFamilyIndex = static_cast<uint32_t>( index ),
+                               .queueCount = 1,
+                               .pQueuePriorities = &priority,
+                           };
+                       } ) |
+        std::ranges::to<std::vector>();
+
+    // We use dynamic rendering, sync2 + Core 1.2 features
+
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamic_rendering{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR,
+        .dynamicRendering = VK_TRUE,
+    };
+
+    VkPhysicalDeviceSynchronization2FeaturesKHR sync2{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
+        .pNext = &dynamic_rendering,
+        .synchronization2 = VK_TRUE,
+    };
+
+    VkPhysicalDeviceVulkan12Features vk12_features{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+        .pNext = &sync2,
+        .descriptorIndexing = VK_TRUE,
+        .timelineSemaphore = VK_TRUE,
+        .bufferDeviceAddress = VK_TRUE,
+    };
+
+    VkPhysicalDeviceFeatures basic_features{
+        .shaderStorageImageReadWithoutFormat = VK_TRUE,
+        .shaderStorageImageWriteWithoutFormat = VK_TRUE,
+    };
+
+    VkDeviceCreateInfo device_info{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &vk12_features,
+        .queueCreateInfoCount = static_cast<uint32_t>( queue_infos.size() ),
+        .pQueueCreateInfos = queue_infos.data(),
+        .enabledExtensionCount = static_cast<uint32_t>( settings.device_extensions.size() ),
+        .ppEnabledExtensionNames = settings.device_extensions.data(),
+        .pEnabledFeatures = &basic_features,
+    };
+
+    return vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
+}
+
 VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                                  VkDebugUtilsMessageTypeFlagsEXT,
                                  const VkDebugUtilsMessengerCallbackDataEXT*,
@@ -178,6 +238,8 @@ VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_
 
 
 Device::~Device() {
+    if ( device_ != VK_NULL_HANDLE ) { vkDestroyDevice( device_, nullptr ); }
+
     if ( debug_messenger_ != VK_NULL_HANDLE ) {
         vkDestroyDebugUtilsMessengerEXT( instance_, debug_messenger_, nullptr );
     }

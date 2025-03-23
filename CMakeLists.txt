@@ -5,7 +5,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 # -Wno-missing-field-initializers: Vulkan has giant structs which we initialize with { }
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-missing-designated-field-initializers")
 
 option(ALOE_ENABLE_TESTS "Enable or disable building the tests" OFF)
 
