@@ -1,11 +1,11 @@
-#include <numeric>
-#include <ranges>
-
-#include <GLFW/glfw3.h>
-
 #include <aloe/core/Device.h>
 #include <aloe/util/log.h>
 #include <aloe/util/vulkan_util.h>
+
+#include <GLFW/glfw3.h>
+
+#include <numeric>
+#include <ranges>
 
 namespace aloe {
 

@@ -84,11 +84,12 @@ IncludeBlocks: Regroup
 FixNamespaceComments: true
 QualifierAlignment: Left
 IncludeCategories:
-  - Regex: '^<[a-z_]+>'
-    Priority: -1
-  - Regex: '^<.+\.h{if cpp}(pp)?{end}>'
-    Priority: 1
-  - Regex: '^<.*'
-    Priority: 2
-  - Regex: '.*'
+  # Headers in <> without extension (std lib)
+  - Regex:           '<([A-Za-z0-9\Q/-_\E])+>'
+    Priority:        4
+  # Headers from aloe itself
+  - Regex:           '<(aloe)\/'
+    Priority:        2
+  # External dependencies
+  - Regex: '<([A-Za-z0-9.\Q/-_\E])+>'
     Priority: 3

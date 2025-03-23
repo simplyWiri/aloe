@@ -1,7 +1,8 @@
-#include <GLFW/glfw3.h>
 #include <aloe/core/Device.h>
 #include <aloe/core/Swapchain.h>
 #include <aloe/util/log.h>
+
+#include <GLFW/glfw3.h>
 #include <gtest/gtest.h>
 
 class SwapchainTestFixture : public ::testing::Test {
@@ -22,6 +23,6 @@ TEST_F( SwapchainTestFixture, SwapchainInitialization ) {
     auto swapchain = aloe::Swapchain::create_swapchain( *device_, {} );
     EXPECT_TRUE( swapchain.has_value() );
 
-    EXPECT_EQ(device_->debug_info().num_warning_, 0);
-    EXPECT_EQ(device_->debug_info().num_error_, 0);
+    EXPECT_EQ( device_->debug_info().num_warning_, 0 );
+    EXPECT_EQ( device_->debug_info().num_error_, 0 );
 }

@@ -1,5 +1,6 @@
 #include <aloe/core/Device.h>
 #include <aloe/util/log.h>
+
 #include <gtest/gtest.h>
 
 class DeviceTestsFixture : public ::testing::Test {

@@ -13,8 +13,7 @@ class ILogger {
     LogLevel log_level_ = LogLevel::Trace;
 
 public:
-    explicit ILogger( LogLevel log_level = LogLevel::Trace )
-        : log_level_( log_level ) {}
+    explicit ILogger( LogLevel log_level = LogLevel::Trace ) : log_level_( log_level ) {}
     virtual ~ILogger() = default;
 
     virtual void log( LogLevel level, std::string_view message ) = 0;
@@ -63,8 +62,7 @@ class MockLogger final : public ILogger {
     };
 
 public:
-    MockLogger()
-        : ILogger( LogLevel::Trace ) {}
+    MockLogger() : ILogger( LogLevel::Trace ) {}
 
     void log( LogLevel level, std::string_view message ) override {
         entries.emplace_back( level, std::string( message ) );

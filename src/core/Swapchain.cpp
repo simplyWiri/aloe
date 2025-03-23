@@ -1,5 +1,3 @@
-#include <algorithm>
-
 #include <aloe/core/Device.h>
 #include <aloe/core/Swapchain.h>
 #include <aloe/util/log.h>
@@ -7,6 +5,8 @@
 
 #include <GLFW/glfw3.h>
 #include <volk.h>
+
+#include <algorithm>
 
 namespace aloe {
 

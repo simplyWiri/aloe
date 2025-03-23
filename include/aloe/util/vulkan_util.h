@@ -1,9 +1,9 @@
 #pragma once
 
+#include <aloe/util/log.h>
+
 #include <functional>
 #include <vector>
-
-#include <aloe/util/log.h>
 
 namespace aloe {
 

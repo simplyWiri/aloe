@@ -1,9 +1,9 @@
 #pragma once
 
-#include <memory>
-
 #include <tl/expected.hpp>
 #include <volk.h>
+
+#include <memory>
 
 struct GLFWwindow;
 
@@ -20,7 +20,8 @@ struct SwapchainSettings {
 
 // An abstraction which managers the window, input, surface & swapchain for Vulkan
 class Swapchain {
-    constexpr static VkSurfaceFormatKHR hdr_target = { VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT };
+    constexpr static VkSurfaceFormatKHR hdr_target = { VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                                                       VK_COLOR_SPACE_HDR10_ST2084_EXT };
     constexpr static VkSurfaceFormatKHR sdr_target = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 
     const Device& device_;
