@@ -11,6 +11,11 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
     // std::make_unique doesn't work when the class has a private constructor.
     auto device = std::unique_ptr<Device>( new Device() );
 
+    // We do not need the `VK_KHR_SWAPCHAIN_EXTENSION_NAME` extensions if we are running a headless instance.
+    if ( settings.headless ) {
+        settings.device_extensions.erase( settings.device_extensions.begin(), settings.device_extensions.begin() + 1 );
+    }
+
     // Initialize volk, create our VkInstance
     auto result = create_instance( *device, settings );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
@@ -39,13 +44,18 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
     };
 
     constexpr std::array validation_layers = { "VK_LAYER_KHRONOS_validation" };
-    constexpr std::array instance_extensions = {
+    std::vector instance_extensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
+        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
         VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
     };
+
+    // If we are running without a screen, we do not need any swapchain extensions
+    if ( settings.headless ) {
+        instance_extensions.erase( instance_extensions.begin(), instance_extensions.begin() + 2 );
+    }
 
     VkInstanceCreateInfo instance_info{ .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                                         .flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR,

@@ -1,5 +1,5 @@
 # Dummy test executable
-add_executable(basic_test test.cpp)
+add_executable(basic_test core/device_tests.cpp)
 target_link_libraries(basic_test gtest gtest_main aloe)
 
 # Add the test to CTest

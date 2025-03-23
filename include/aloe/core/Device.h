@@ -3,8 +3,9 @@
 #include <memory>
 
 #include <tl/expected.hpp>
+
+#define VK_ENABLE_BETA_EXTENSIONS
 #include <volk.h>
-#include <vulkan/vulkan_beta.h>
 
 
 namespace aloe {
@@ -14,16 +15,13 @@ struct DeviceSettings {
     uint32_t version = VK_MAKE_VERSION( 1, 0, 0 );
 
     bool enable_validation = true;
+    bool headless = false;
 
-    std::array<const char*, 9> device_extensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
-        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
-        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-        VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-        VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
-        VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+    std::vector<const char*> device_extensions{
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,          VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,  VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_MAINTENANCE1_EXTENSION_NAME,       VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
         VK_KHR_COPY_COMMANDS_2_EXTENSION_NAME,
     };
 };
@@ -64,6 +62,9 @@ public:
 
 
     const DebugInformation& debug_info() const { return debug_info_; }
+    VkInstance instance() const { return instance_; }
+    VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
+    VkDevice device() const { return device_; }
 
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
