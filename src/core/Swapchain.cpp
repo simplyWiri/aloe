@@ -45,6 +45,12 @@ Swapchain::~Swapchain() {
     glfwTerminate();
 }
 
+bool Swapchain::poll_events() {
+    glfwPollEvents();
+
+    return glfwWindowShouldClose( window_ );
+}
+
 void Swapchain::resize() {
     vkDeviceWaitIdle( device_.device() );
 
@@ -112,6 +118,8 @@ VkResult Swapchain::build_swapchain() {
     auto [width, height] = capabilities_.currentExtent;
     auto surface_format = ( use_hdr_ && hdr_supported_ ) ? hdr_target : sdr_target;
 
+    if ( width <= 0 || height <= 0 ) { return VK_ERROR_SURFACE_LOST_KHR; }
+
     VkSwapchainCreateInfoKHR swapchainCI = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = surface_,
@@ -139,6 +147,7 @@ VkResult Swapchain::build_swapchain() {
         vkDestroySwapchainKHR( device_.device(), old_swapchain, nullptr );
 
         // The memory of the image itself is owned and managed by the swapchain, and does not need to be freed.
+        image_views_.clear();
         images_.clear();
     }
 

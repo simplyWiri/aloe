@@ -47,6 +47,12 @@ public:
                                                                                 SwapchainSettings settings );
     ~Swapchain();
 
+
+    // Returns true we should exit the program
+    bool poll_events();
+
+    GLFWwindow* window() const { return window_; }
+
 protected:
     void resize();
     VkResult load_surface_capabilities();

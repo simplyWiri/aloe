@@ -92,6 +92,10 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
     result = vkCreateInstance( &instance_info, nullptr, &device.instance_ );
     if ( result == VK_SUCCESS ) { volkLoadInstance( device.instance_ ); }
 
+    if ( settings.enable_validation ) {
+        vkCreateDebugUtilsMessengerEXT( device.instance_, &debug_info, nullptr, &device.debug_messenger_ );
+    }
+
     log_write( LogLevel::Trace,
                "Successfully loaded Volk & created Vulkan instance, validation is {:s}, using instance layers: {}, "
                "and api version {}.{}.{}",
