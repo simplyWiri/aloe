@@ -49,9 +49,10 @@ public:
     };
 
 private:
+    static DebugInformation debug_info_;
+
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
-    DebugInformation debug_info_;
     std::vector<PhysicalDevice> physical_devices_;
     VkDevice device_ = VK_NULL_HANDLE;
 
@@ -61,11 +62,13 @@ public:
     ~Device();
 
 
-    const DebugInformation& debug_info() const { return debug_info_; }
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
     VkDevice device() const { return device_; }
 
+    static const DebugInformation& debug_info() {
+        return debug_info_;
+    }
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
     static VkResult pick_physical_device( Device& device, const DeviceSettings& settings );

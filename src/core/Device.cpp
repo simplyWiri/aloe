@@ -9,9 +9,14 @@
 
 namespace aloe {
 
+Device::DebugInformation Device::debug_info_ = {};
+
 tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSettings settings ) {
     // std::make_unique doesn't work when the class has a private constructor.
     auto device = std::unique_ptr<Device>( new Device() );
+
+    // Reset our debug info
+    Device::debug_info_ = {};
 
     // We do not need the `VK_KHR_SWAPCHAIN_EXTENSION_NAME` extensions if we are running a headless instance.
     if ( settings.headless ) {
@@ -261,8 +266,8 @@ constexpr std::string_view to_string( VkDebugUtilsMessageTypeFlagsEXT type ) {
 VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                                  VkDebugUtilsMessageTypeFlagsEXT message_type,
                                  const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
-                                 void* user_info ) {
-    auto& debug_info = static_cast<Device*>( user_info )->debug_info_;
+                                 void* ) {
+    auto& debug_info = Device::debug_info_;
 
     switch ( message_severity ) {
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: ++debug_info.num_verbose_; break;
