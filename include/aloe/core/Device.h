@@ -66,9 +66,8 @@ public:
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
     VkDevice device() const { return device_; }
 
-    static const DebugInformation& debug_info() {
-        return debug_info_;
-    }
+    static const DebugInformation& debug_info() { return debug_info_; }
+
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
     static VkResult pick_physical_device( Device& device, const DeviceSettings& settings );

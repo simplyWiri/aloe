@@ -1,6 +1,21 @@
 # Dummy test executable
-add_executable(basic_test core/device_tests.cpp core/swapchain_tests.cpp)
-target_link_libraries(basic_test gtest gtest_main aloe)
+add_executable(core_tests
+        core/device_tests.cpp
+        core/swapchain_tests.cpp
+)
+
+add_executable(pipeline_tests
+        core/pipeline_manager_tests.cpp
+)
+
+find_package(SPIRV-Tools CONFIG REQUIRED)
+
+target_link_libraries(core_tests gtest gtest_main aloe)
+target_link_libraries(pipeline_tests gtest gtest_main aloe SPIRV-Tools-static)
 
 # Add the test to CTest
-add_test(NAME BasicTest COMMAND basic_test)
+add_test(NAME "Core Tests" COMMAND core_tests)
+add_test(NAME "Pipeline Tests" COMMAND pipeline_tests)
+
+add_custom_command(TARGET pipeline_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/core/resources $<TARGET_FILE_DIR:pipeline_tests>/resources)

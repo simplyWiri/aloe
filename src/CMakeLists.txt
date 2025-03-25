@@ -12,14 +12,20 @@ function(aloe_add_library libname)
     if(ALC_LINK_AGAINST)
         target_link_libraries(${libname} PUBLIC ${ALC_LINK_AGAINST})
     endif()
+
+    # Slang doesn't properly work when its brought in as a dependency via submodules (https://github.com/shader-slang/slang/issues/6676)
+    target_link_libraries(${libname} PUBLIC $ENV{VULKAN_SDK}/Lib/libslang.dylib)
+    target_include_directories(${libname} PUBLIC $ENV{VULKAN_SDK}/include/slang)
 endfunction()
 
 aloe_add_library(aloe
     HEADERS
         core/Device.h
+        core/PipelineManager.h
         core/Swapchain.h
     SOURCES
         core/Device.cpp
+        core/PipelineManager.cpp
         core/Swapchain.cpp
         LINK_AGAINST
         glfw
