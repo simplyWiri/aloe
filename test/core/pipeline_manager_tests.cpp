@@ -23,8 +23,7 @@ protected:
         device_ = aloe::Device::create_device( { .enable_validation = false } ).value();
         pipeline_manager_ = std::shared_ptr<aloe::PipelineManager>( new aloe::PipelineManager( {
             .device = *device_,
-            .root_paths = { "resources" },
-            .debug_info = true,
+            .root_paths = { { "resources" } },
         } ) );
 
         spirv_tools_.SetMessageConsumer(
@@ -36,61 +35,79 @@ protected:
 };
 
 TEST_F( PipelineManagerTestFixture, BasicShaderCompilation ) {
-    const auto result = pipeline_manager_->compile_shader( {
-        .name = "test.slang",
-        .entry_point = "main",
-    } );
+    const auto result = pipeline_manager_->compile_pipeline(
+        {
+            .name = "test.slang",
+        },
+        "main" );
 
     ASSERT_TRUE( result.has_value() ) << "Actual result: " << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( *result ) );
+    EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) );
 }
 
 TEST_F( PipelineManagerTestFixture, BasicShaderInline ) {
-    const auto result = pipeline_manager_->compile_shader( {
-        .name = "example_inline.slang",
-        .shader_code = R"(
+    const auto result = pipeline_manager_->compile_pipeline(
+        {
+            .name = "example_inline.slang",
+            .shader_code = R"(
 [numthreads(16, 16, 1)]
 [shader("compute")]
 void main(uint3 global_id : SV_DispatchThreadID, uint3 local_id : SV_GroupThreadID) { }
         )",
-        .entry_point = "main",
-    } );
+        },
+        "main" );
 
     ASSERT_TRUE( result.has_value() ) << "Actual result: " << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( *result ) );
+    EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) );
 }
 
 TEST_F( PipelineManagerTestFixture, ShaderModules ) {
-    const auto result = pipeline_manager_->compile_shader( {
-        .name = "example2_inline.slang",
-        .shader_code = R"(
+    const auto result = pipeline_manager_->compile_pipeline(
+        {
+            .name = "example2_inline.slang",
+            .shader_code = R"(
 import test;
 
 [shader("vertex")]
-void main() {
-    int result = add_test(1, 5);
+int main() {
+    return add_test(1, 5);
 })",
-        .entry_point = "main",
-    } );
+        },
+        "main" );
 
     ASSERT_TRUE( result.has_value() ) << "Actual result: " << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( *result ) );
+    EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) );
 }
 
 TEST_F( PipelineManagerTestFixture, ShaderDefines ) {
-    const auto result = pipeline_manager_->compile_shader( {
-        .name = "example3_inline.slang",
+    pipeline_manager_->update_define( "TEST_DEFINE", "1" );
+
+    aloe::ShaderInfo shader{
+        .name = "example_defines.slang",
         .shader_code = R"(
 [shader("vertex")]
-void main() {
-    int result = TEST_DEFINE;
+int main() {
+    return TEST_DEFINE;
 })",
-        .entry_point = "main",
-        .defines = {
-            { "TEST_DEFINE", "1" },
-        },
-    } );
+    };
 
+    const auto result = pipeline_manager_->compile_pipeline( shader, "main" );
     ASSERT_TRUE( result.has_value() ) << "Actual result: " << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( *result ) );
+
+    const auto base_version = pipeline_manager_->get_pipeline_version( *result );
+    const auto base_spirv = pipeline_manager_->get_pipeline_spirv( *result );
+    EXPECT_EQ( base_version, 1 );
+    EXPECT_TRUE( spirv_tools_.Validate( base_spirv ) );
+
+    pipeline_manager_->update_define( "TEST_DEFINE", "2" );
+
+    const auto next_result = pipeline_manager_->compile_pipeline( shader, "main" );
+    ASSERT_TRUE( next_result.has_value() ) << "Actual result: " << next_result.error();
+    ASSERT_EQ( *result, *next_result );
+
+    const auto next_version = pipeline_manager_->get_pipeline_version( *result );
+    const auto next_spirv = pipeline_manager_->get_pipeline_spirv( *result );
+    EXPECT_EQ( next_version, 2 );
+    EXPECT_TRUE( spirv_tools_.Validate( next_spirv ) );
+    EXPECT_NE( base_spirv, next_spirv );
 }
