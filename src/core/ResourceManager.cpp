@@ -1,0 +1,1 @@
+#include <aloe/core/ResourceManager.h>

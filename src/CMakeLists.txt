@@ -2,7 +2,7 @@
 # abstract all logic regarding exporting / library creation.
 # Define a helper function to simplify adding libraries.
 function(aloe_add_library libname)
-    cmake_parse_arguments(ALC "" "" "SOURCES;HEADERS;LINK_AGAINST" ${ARGN})
+    cmake_parse_arguments(ALC "" "" "SOURCES;LINK_AGAINST" ${ARGN})
 
     add_library(${libname} STATIC ${ALC_SOURCES})
     target_include_directories(${libname} PUBLIC
@@ -18,17 +18,29 @@ function(aloe_add_library libname)
     target_include_directories(${libname} PUBLIC $ENV{VULKAN_SDK}/include/slang)
 endfunction()
 
+aloe_add_library(vma
+    SOURCES
+        vma.cpp
+    LINK_AGAINST
+        VulkanMemoryAllocator
+        volk
+)
+set_target_properties(vma PROPERTIES COMPILE_FLAGS "-w") # vma does not build cleanly.
+
 aloe_add_library(aloe
     HEADERS
         core/Device.h
         core/PipelineManager.h
+        core/ResourceManager.h
         core/Swapchain.h
     SOURCES
         core/Device.cpp
         core/PipelineManager.cpp
+        core/ResourceManager.cpp
         core/Swapchain.cpp
-        LINK_AGAINST
+    LINK_AGAINST
         glfw
-        volk
         tl::expected
+        vma
+        volk
 )
