@@ -1,11 +1,11 @@
 #include <aloe/core/PipelineManager.h>
+#include <aloe/util/algorithms.h>
 #include <aloe/util/log.h>
 
 #include <slang.h>
 
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <ranges>
 #include <sstream>
 
@@ -32,7 +32,7 @@ struct SlangFilesystem : ISlangFileSystem {
 
         // File not found in memory; attempt to read from the standard file system
         for ( const auto& root_path : root_paths_ ) {
-            const auto full_path = std::filesystem::canonical( std::filesystem::path{ root_path } / module_path );
+            const auto full_path = std::filesystem::path{ root_path } / module_path;
             if ( std::filesystem::exists( full_path ) ) {
                 std::ifstream file( full_path, std::ios::binary );
 
@@ -89,6 +89,14 @@ private:
     std::unordered_map<std::string, std::string> files_;
 };
 
+const std::vector<PipelineManager::ShaderState*>& PipelineManager::ShaderState::get_dependents() const {
+    return dependents;
+}
+
+bool PipelineManager::PipelineState::matches_shader( const ShaderState& shader ) const {
+    return shader.name == info.compute_shader.name;
+}
+
 PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_paths )
     : device_( device )
     , root_paths_( std::move( root_paths ) ) {
@@ -110,6 +118,10 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
             std::format( "{}: error: {}", compute_pipeline.compute_shader.name, spirv.error() ) );
     }
 
+    if ( const auto error = update_shader_dependency_graph( compute_pipeline.compute_shader.name, *module ) ) {
+        return tl::make_unexpected( error.value() );
+    }
+
     auto& state = get_pipeline_state( compute_pipeline );
     state.version++;
     state.spirv = std::move( *spirv );
@@ -119,10 +131,16 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
 void PipelineManager::set_define( const std::string& name, const std::string& value ) {
     defines_[name] = value;
     session_ = nullptr;
+
+    // Recompile all shaders that have an entry point
+    recompile_dependents( shaders_ | std::views::transform( []( const auto& shader ) { return shader->name; } ) |
+                          std::ranges::to<std::vector>() );
 }
 
 void PipelineManager::set_virtual_file( const std::string& name, const std::string& contents ) {
     filesystem_->set_file( name, contents );
+
+    recompile_dependents( { name } );
 }
 
 uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
@@ -179,6 +197,13 @@ PipelineManager::PipelineState& PipelineManager::get_pipeline_state( const Compu
     }
 }
 
+PipelineManager::ShaderState& PipelineManager::get_shader_state( const std::string& name ) {
+    auto iter =
+        std::ranges::find_if( shaders_, [&]( const std::unique_ptr<ShaderState>& s ) { return s->name == name; } );
+    if ( iter == shaders_.end() ) { return *shaders_.emplace_back( std::make_unique<ShaderState>( name ) ); }
+    return **iter;
+}
+
 tl::expected<Slang::ComPtr<slang::IModule>, std::string>
 PipelineManager::compile_module( const ShaderCompileInfo& shader_info ) {
     const auto session = get_session();
@@ -211,14 +236,6 @@ PipelineManager::compile_module( const ShaderCompileInfo& shader_info ) {
          linked_program == nullptr ) {
         const auto str = std::string{ static_cast<const char*>( diagnostics->getBufferPointer() ) };
         return tl::make_unexpected( "Failed to link program" + str );
-    }
-
-    auto layout = linked_program->getLayout();
-    auto entry_points = layout->getEntryPointCount();
-
-    for ( uint32_t i = 0; i < entry_points; ++i ) {
-        auto entry_point = layout->getEntryPointByIndex( i );
-        std::cout << "Entry Point " << i << ": " << entry_point->getName() << std::endl;
     }
 
     return module;
@@ -263,6 +280,60 @@ PipelineManager::compile_spirv( const Slang::ComPtr<slang::IModule>& module, con
     // do our pointer arithmetic, to avoid over-reading.
     const auto* code_ptr = static_cast<const uint32_t*>( code->getBufferPointer() );
     return std::vector( code_ptr, code_ptr + ( code->getBufferSize() / 4 ) );
+}
+
+std::optional<std::string>
+PipelineManager::update_shader_dependency_graph( const std::string& name,
+                                                 const Slang::ComPtr<slang::IModule>& module ) {
+    // We are being called directly from (`compile_shader`) - we may need to update our dependency information, even if
+    // we already have dependency information for `name`.
+    auto& shader = get_shader_state( name );
+
+    // Fix any links pointing to our current shader as a dependent (they may now be changed), clear our dependencies
+    std::ranges::for_each( shader.dependencies, [&]( ShaderState* d ) { std::erase( d->dependents, &shader ); } );
+    shader.dependencies.clear();
+
+    for ( auto i = 0; i < module->getDependencyFileCount(); ++i ) {
+        auto file = std::string{ module->getDependencyFilePath( i ) };
+        if ( const auto dot_pos = file.find( '.' ); dot_pos != std::string_view::npos ) {
+            if ( const auto colon_pos = file.find( ':', dot_pos ); colon_pos != std::string_view::npos ) {
+                file.erase( colon_pos );
+            }
+        }
+
+        auto& dependency_shader = get_shader_state( file );
+        if ( &dependency_shader == &shader ) { continue; }
+
+        // Re-introduce our shader as a dependent of its dependencies
+        shader.dependencies.emplace_back( &dependency_shader );
+        dependency_shader.dependents.emplace_back( &shader );
+
+        // If it has been loaded already, we don't need to do deeper processing.
+        if ( dependency_shader.been_loaded ) { continue; }
+
+        if ( const auto dep_module = compile_module( { dependency_shader.name } ) ) {
+            update_shader_dependency_graph( dependency_shader.name, *dep_module );
+        } else {
+            return std::format( "{}'s dependency {} failed to compile, error: {}", name, file, dep_module.error() );
+        }
+    }
+
+    shader.been_loaded = true;
+    return std::nullopt;
+}
+
+void PipelineManager::recompile_dependents( const std::vector<std::string>& shader_paths ) {
+    const auto root_shaders =
+        shader_paths | std::views::transform( [&]( const auto& path ) { return &get_shader_state( path ); } );
+    const auto all_shaders = aloe::topological_sort( root_shaders );
+    auto all_pipelines = pipelines_ | std::views::filter( [&]( const auto& pipeline ) {
+                             return std::ranges::any_of( all_shaders, [&]( const auto* shader ) {
+                                 return pipeline.matches_shader( *shader );
+                             } );
+                         } );
+
+
+    for ( const auto& pipeline : all_pipelines ) { compile_pipeline( pipeline.info ); }
 }
 
 }// namespace aloe

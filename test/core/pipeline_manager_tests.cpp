@@ -20,7 +20,7 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Trace );
 
-        device_ = aloe::Device::create_device( { .enable_validation = false } ).value();
+        device_ = aloe::Device::create_device( { .enable_validation = false, .headless = true } ).value();
         pipeline_manager_ =
             std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
 
@@ -133,7 +133,7 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
     // Set up the virtual include file & a shader that dependents this file
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 5 + a + b; }" );
-    pipeline_manager_->set_virtual_file( "main_shader.slang", COMPUTE_ENTRY "void main() { int x = t; }" );
+    pipeline_manager_->set_virtual_file( "main_shader.slang", COMPUTE_ENTRY "void main() { int x = 5; }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main_shader.slang", .entry_point = "main" };
     const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
