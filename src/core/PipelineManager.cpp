@@ -20,7 +20,11 @@ struct SlangFilesystem : ISlangFileSystem {
 
     // Implementation of the loadFile method from ISlangFileSystem
     SlangResult loadFile( const char* path, ISlangBlob** outBlob ) override {
-        const auto it = files_.find( path );
+        // Slang adds a `-module` suffix to paths for modules; We need to get rid of this;
+        std::string_view module_path = path;
+        if ( module_path.ends_with( "-module" ) ) { module_path.remove_suffix( 7 ); }
+
+        const auto it = files_.find( std::string( module_path ) );
         if ( it != files_.end() ) {
             // File found in memory; create a blob from the in-memory file content
             return create_blob( it->second, outBlob );
@@ -28,7 +32,7 @@ struct SlangFilesystem : ISlangFileSystem {
 
         // File not found in memory; attempt to read from the standard file system
         for ( const auto& root_path : root_paths_ ) {
-            const auto full_path = std::filesystem::canonical( std::filesystem::path{ root_path } / path );
+            const auto full_path = std::filesystem::canonical( std::filesystem::path{ root_path } / module_path );
             if ( std::filesystem::exists( full_path ) ) {
                 std::ifstream file( full_path, std::ios::binary );
 

@@ -94,7 +94,8 @@ TEST_F( PipelineManagerTestFixture, ShaderRecompilesWithDefine ) {
 // Recompiling after changing a dependent virtual file should increment version
 TEST_F( PipelineManagerTestFixture, VirtualFileDependencyWorks ) {
     // Set up the virtual include file & a shader that dependents this file
-    pipeline_manager_->set_virtual_file( "test.slang", "module test; int add(int a, int b) { return 5 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "test.slang",
+                                         "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang",
                                          "import test;" COMPUTE_ENTRY " void main() { int x = add(1, 2); }" );
 
@@ -105,7 +106,8 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyWorks ) {
 
 TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation ) {
     // Set up the virtual include file & a shader that dependents this file
-    pipeline_manager_->set_virtual_file( "test.slang", "module test; int add(int a, int b) { return 5 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "test.slang",
+                                         "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang",
                                          "import test;" COMPUTE_ENTRY "void main() { int x = add(1, 2); }" );
 
@@ -117,7 +119,8 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation )
     EXPECT_EQ( baseline_version, 1 );
 
     // Modify the shared include, this should automatically result in the pipeline being recompiled immediately
-    pipeline_manager_->set_virtual_file( "test.slang", "module test; int add(int a, int b) { return 8 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "test.slang",
+                                         "module test; public int add(int a, int b) { return 8 + a + b; }" );
 
     const uint64_t next_version = pipeline_manager_->get_pipeline_version( *handle );
 
@@ -128,7 +131,8 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation )
 // Changing an unrelated virtual file should not trigger recompilation
 TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerUpdate ) {
     // Set up the virtual include file & a shader that dependents this file
-    pipeline_manager_->set_virtual_file( "test.slang", "module test; int add(int a, int b) { return 5 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "test.slang",
+                                         "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang", COMPUTE_ENTRY "void main() { int x = t; }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main_shader.slang", .entry_point = "main" };
@@ -140,7 +144,8 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
 
     // Modify the shared include, this should not result in the pipeline being recompiled - because `main_shader.slang`
     // does not depend on `test` at all.
-    pipeline_manager_->set_virtual_file( "test.slang", "module test; int add(int a, int b) { return 8 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "test.slang",
+                                         "module test; public int add(int a, int b) { return 8 + a + b; }" );
 
     const uint64_t next_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( baseline_version, next_version );
@@ -149,7 +154,7 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
 // Updating a dependent file causes the pipeline to automatically recompile
 TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
     // Set up shader module graph: `main` depends on `mid`
-    pipeline_manager_->set_virtual_file( "mid.slang", "module mid; int square(int x) { return x * x; }" );
+    pipeline_manager_->set_virtual_file( "mid.slang", "module mid; public int square(int x) { return x * x; }" );
     pipeline_manager_->set_virtual_file( "main.slang",
                                          "import mid;" COMPUTE_ENTRY "void main() { int x = square(4); }" );
 
@@ -160,7 +165,7 @@ TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
     const uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( baseline_version, 1 );
 
-    pipeline_manager_->set_virtual_file( "mid.slang", "module mid; int square(int x) { return x * x * x; }" );
+    pipeline_manager_->set_virtual_file( "mid.slang", "module mid; public int square(int x) { return x * x * x; }" );
 
     const uint64_t new_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( new_version, baseline_version + 1 );
@@ -169,9 +174,11 @@ TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
 // Changing a transitive dependency should recompile all dependents
 TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalShader ) {
     // main -> mid -> common
-    pipeline_manager_->set_virtual_file( "common.slang", "module common; int add(int a, int b) { return a + b; }" );
-    pipeline_manager_->set_virtual_file( "mid.slang",
-                                         "module mid; import common; int triple(int x) { return add(x, add(x, x)); }" );
+    pipeline_manager_->set_virtual_file( "common.slang",
+                                         "module common; public int add(int a, int b) { return a + b; }" );
+    pipeline_manager_->set_virtual_file(
+        "mid.slang",
+        "module mid; import common; public int triple(int x) { return add(x, add(x, x)); }" );
     pipeline_manager_->set_virtual_file( "main.slang",
                                          "import mid;" COMPUTE_ENTRY "void main() { int x = triple(3); }" );
 
@@ -183,7 +190,8 @@ TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalSha
     EXPECT_EQ( initial_version, 1 );
 
     // Modify the transitive dependency: common.slang
-    pipeline_manager_->set_virtual_file( "common.slang", "module common; int add(int a, int b) { return 1 + a + b; }" );
+    pipeline_manager_->set_virtual_file( "common.slang",
+                                         "module common; public int add(int a, int b) { return 1 + a + b; }" );
 
     const uint64_t new_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( new_version, initial_version + 1 );
@@ -199,11 +207,11 @@ TEST_F( PipelineManagerTestFixture, DiamondDependencyRecompilesOnce ) {
            \           /
              shared_dep (D)
     */
-    pipeline_manager_->set_virtual_file( "shared_dep.slang", "module shared_dep; int val() { return 42; }" );
+    pipeline_manager_->set_virtual_file( "shared_dep.slang", "module shared_dep; public int val() { return 42; }" );
     pipeline_manager_->set_virtual_file( "mid_left.slang",
-                                         "import shared_dep; module mid_left; int left() { return val(); }" );
+                                         "import shared_dep; module mid_left; public int left() { return val(); }" );
     pipeline_manager_->set_virtual_file( "mid_right.slang",
-                                         "import shared_dep; module mid_right; int right() { return val(); }" );
+                                         "import shared_dep; module mid_right; public int right() { return val(); }" );
     pipeline_manager_->set_virtual_file( "main.slang",
                                          "import mid_left;import mid_right;" COMPUTE_ENTRY
                                          "void main() { int x = left() + right(); }" );
@@ -216,9 +224,7 @@ TEST_F( PipelineManagerTestFixture, DiamondDependencyRecompilesOnce ) {
     EXPECT_EQ( version_before, 1 );
 
     // Modify shared leaf dependency
-    pipeline_manager_->set_virtual_file( "shared_dep.slang",
-                                         "module shared_dep;\n"
-                                         "int val() { return 1337; }" );
+    pipeline_manager_->set_virtual_file( "shared_dep.slang", "module shared_dep; public int val() { return 1337; }" );
 
     const uint64_t version_after = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( version_after, version_before + 1 );
@@ -254,7 +260,7 @@ TEST_F( PipelineManagerTestFixture, MultipleEntryPointsProduceDifferentPipelines
 
 // Modifying a shared include should cause all entry points that depend on it to be recompiled
 TEST_F( PipelineManagerTestFixture, SharedIncludeRecompilesAllEntryPoints ) {
-    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; int val() { return 1; }" );
+    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; public int val() { return 1; }" );
 
     pipeline_manager_->set_virtual_file( "multi_entry.slang",
                                          "import shared;" COMPUTE_ENTRY "void main1() { int a = val(); }" COMPUTE_ENTRY
@@ -275,7 +281,7 @@ TEST_F( PipelineManagerTestFixture, SharedIncludeRecompilesAllEntryPoints ) {
     EXPECT_EQ( version2_before, 1 );
 
     // Modify the shared include
-    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; int val() { return 999; }" );
+    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; public int val() { return 999; }" );
 
     const uint64_t version1_after = pipeline_manager_->get_pipeline_version( *handle1 );
     const uint64_t version2_after = pipeline_manager_->get_pipeline_version( *handle2 );
