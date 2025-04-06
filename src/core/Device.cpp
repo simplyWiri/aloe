@@ -3,6 +3,7 @@
 #include <aloe/util/vulkan_util.h>
 
 #include <GLFW/glfw3.h>
+#include <vma/vma.h>
 
 #include <numeric>
 #include <ranges>
@@ -33,9 +34,11 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
     result = create_logical_device( *device, settings );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
 
+    result = create_allocator( *device );
+    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+
     return device;
 }
-
 
 VkResult Device::create_instance( Device& device, const DeviceSettings& settings ) {
     auto result = volkInitialize();
@@ -246,6 +249,43 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
     return vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
 }
 
+VkResult Device::create_allocator( Device& device ) {
+    VmaVulkanFunctions vulkanFunctions{};
+    vulkanFunctions.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
+    vulkanFunctions.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
+    vulkanFunctions.vkAllocateMemory = vkAllocateMemory;
+    vulkanFunctions.vkFreeMemory = vkFreeMemory;
+    vulkanFunctions.vkMapMemory = vkMapMemory;
+    vulkanFunctions.vkUnmapMemory = vkUnmapMemory;
+    vulkanFunctions.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
+    vulkanFunctions.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
+    vulkanFunctions.vkBindBufferMemory = vkBindBufferMemory;
+    vulkanFunctions.vkBindImageMemory = vkBindImageMemory;
+    vulkanFunctions.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
+    vulkanFunctions.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
+    vulkanFunctions.vkCreateBuffer = vkCreateBuffer;
+    vulkanFunctions.vkDestroyBuffer = vkDestroyBuffer;
+    vulkanFunctions.vkCreateImage = vkCreateImage;
+    vulkanFunctions.vkDestroyImage = vkDestroyImage;
+    vulkanFunctions.vkCmdCopyBuffer = vkCmdCopyBuffer;
+    vulkanFunctions.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2KHR;
+    vulkanFunctions.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2KHR;
+    vulkanFunctions.vkBindBufferMemory2KHR = vkBindBufferMemory2KHR;
+    vulkanFunctions.vkBindImageMemory2KHR = vkBindImageMemory2KHR;
+    vulkanFunctions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2KHR;
+    vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+    VmaAllocatorCreateInfo allocatorInfo = {};
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+    allocatorInfo.device = device.device();
+    allocatorInfo.physicalDevice = device.physical_device();
+    allocatorInfo.instance = device.instance();
+    allocatorInfo.pVulkanFunctions = static_cast<const VmaVulkanFunctions*>( &vulkanFunctions );
+
+    return vmaCreateAllocator( &allocatorInfo, &device.allocator_ );
+}
+
 constexpr LogLevel to_log_level( VkDebugUtilsMessageSeverityFlagBitsEXT severity ) {
     switch ( severity ) {
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: return LogLevel::Trace;
@@ -270,11 +310,11 @@ VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_
     auto& debug_info = Device::debug_info_;
 
     switch ( message_severity ) {
-        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: ++debug_info.num_verbose_; break;
-        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: ++debug_info.num_error_; break;
-        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: ++debug_info.num_warning_; break;
-        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: ++debug_info.num_info_; break;
-        default: ++debug_info.num_unknown_; break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: ++debug_info.num_verbose; break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: ++debug_info.num_error; break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: ++debug_info.num_warning; break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: ++debug_info.num_info; break;
+        default: ++debug_info.num_unknown; break;
     }
 
     log_write( to_log_level( message_severity ),
@@ -287,6 +327,8 @@ VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_
 
 
 Device::~Device() {
+    if ( allocator_ != VK_NULL_HANDLE ) { vmaDestroyAllocator( allocator_ ); }
+
     if ( device_ != VK_NULL_HANDLE ) { vkDestroyDevice( device_, nullptr ); }
 
     if ( debug_messenger_ != VK_NULL_HANDLE ) {

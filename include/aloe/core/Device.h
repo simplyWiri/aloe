@@ -7,6 +7,7 @@
 #define VK_ENABLE_BETA_EXTENSIONS
 #include <volk.h>
 
+typedef struct VmaAllocator_T* VmaAllocator;
 
 namespace aloe {
 
@@ -29,11 +30,11 @@ struct DeviceSettings {
 class Device {
 public:
     struct DebugInformation {
-        uint32_t num_verbose_{ 0 };
-        uint32_t num_info_{ 0 };
-        uint32_t num_warning_{ 0 };
-        uint32_t num_error_{ 0 };
-        uint32_t num_unknown_{ 0 };
+        uint32_t num_verbose{ 0 };
+        uint32_t num_info{ 0 };
+        uint32_t num_warning{ 0 };
+        uint32_t num_error{ 0 };
+        uint32_t num_unknown{ 0 };
     };
 
     struct PhysicalDevice {
@@ -55,6 +56,7 @@ private:
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     std::vector<PhysicalDevice> physical_devices_;
     VkDevice device_ = VK_NULL_HANDLE;
+    VmaAllocator allocator_ = VK_NULL_HANDLE;
 
 public:
     // Attempt to construct a new device
@@ -65,13 +67,14 @@ public:
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
     VkDevice device() const { return device_; }
+    VmaAllocator allocator() const { return allocator_; }
 
     static const DebugInformation& debug_info() { return debug_info_; }
-
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
     static VkResult pick_physical_device( Device& device, const DeviceSettings& settings );
     static VkResult create_logical_device( Device& device, const DeviceSettings& settings );
+    static VkResult create_allocator( Device& device );
     static VkBool32 debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                                     VkDebugUtilsMessageTypeFlagsEXT message_type,
                                     const VkDebugUtilsMessengerCallbackDataEXT* callback_data,

@@ -8,7 +8,6 @@ class ResourceManagerTestFixture : public ::testing::Test {
 protected:
     std::shared_ptr<aloe::MockLogger> mock_logger_;
     std::unique_ptr<aloe::Device> device_;
-    VmaAllocator allocator_ = VK_NULL_HANDLE;
     std::unique_ptr<aloe::ResourceManager> resource_manager_;
 
     void SetUp() override {
@@ -17,59 +16,22 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Trace );
 
         device_ = aloe::Device::create_device( { .enable_validation = true, .headless = true } ).value();
-
-        VmaVulkanFunctions vulkanFunctions{};
-        vulkanFunctions.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
-        vulkanFunctions.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
-        vulkanFunctions.vkAllocateMemory = vkAllocateMemory;
-        vulkanFunctions.vkFreeMemory = vkFreeMemory;
-        vulkanFunctions.vkMapMemory = vkMapMemory;
-        vulkanFunctions.vkUnmapMemory = vkUnmapMemory;
-        vulkanFunctions.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
-        vulkanFunctions.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
-        vulkanFunctions.vkBindBufferMemory = vkBindBufferMemory;
-        vulkanFunctions.vkBindImageMemory = vkBindImageMemory;
-        vulkanFunctions.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
-        vulkanFunctions.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
-        vulkanFunctions.vkCreateBuffer = vkCreateBuffer;
-        vulkanFunctions.vkDestroyBuffer = vkDestroyBuffer;
-        vulkanFunctions.vkCreateImage = vkCreateImage;
-        vulkanFunctions.vkDestroyImage = vkDestroyImage;
-        vulkanFunctions.vkCmdCopyBuffer = vkCmdCopyBuffer;
-        vulkanFunctions.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2KHR;
-        vulkanFunctions.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2KHR;
-        vulkanFunctions.vkBindBufferMemory2KHR = vkBindBufferMemory2KHR;
-        vulkanFunctions.vkBindImageMemory2KHR = vkBindImageMemory2KHR;
-        vulkanFunctions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2KHR;
-        vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-        vulkanFunctions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-
-        VmaAllocatorCreateInfo allocatorInfo = {};
-        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
-        allocatorInfo.device = device_->device();
-        allocatorInfo.physicalDevice = device_->physical_device();
-        allocatorInfo.instance = device_->instance();
-        allocatorInfo.pVulkanFunctions = static_cast<const VmaVulkanFunctions*>( &vulkanFunctions );
-
-        vmaCreateAllocator( &allocatorInfo, &allocator_ );
-
-        resource_manager_ = std::make_unique<aloe::ResourceManager>( allocator_ );
+        resource_manager_ = std::make_unique<aloe::ResourceManager>( device_->allocator() );
     }
 
     void TearDown() override {
         resource_manager_.reset(nullptr);
 
         VmaTotalStatistics stats;
-        vmaCalculateStatistics( allocator_, &stats );
+        vmaCalculateStatistics( device_->allocator(), &stats );
 
         // There should be zero dangling allocations
         EXPECT_EQ( stats.total.statistics.allocationCount, 0 );
-        vmaDestroyAllocator( allocator_ );
 
         // No validation errors
         const auto debug_info = aloe::Device::debug_info();
-        EXPECT_EQ( debug_info.num_warning_, 0 );
-        EXPECT_EQ( debug_info.num_error_, 0 );
+        EXPECT_EQ( debug_info.num_warning, 0 );
+        EXPECT_EQ( debug_info.num_error, 0 );
     }
 };
 
