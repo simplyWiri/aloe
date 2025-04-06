@@ -16,11 +16,11 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Trace );
 
         device_ = aloe::Device::create_device( { .enable_validation = true, .headless = true } ).value();
-        resource_manager_ = std::make_unique<aloe::ResourceManager>( device_->allocator() );
+        resource_manager_ = std::make_unique<aloe::ResourceManager>( *device_ );
     }
 
     void TearDown() override {
-        resource_manager_.reset(nullptr);
+        resource_manager_.reset( nullptr );
 
         VmaTotalStatistics stats;
         vmaCalculateStatistics( device_->allocator(), &stats );
@@ -36,43 +36,89 @@ protected:
 };
 
 TEST_F( ResourceManagerTestFixture, CreateBuffer ) {
-    const auto handle = resource_manager_->create_buffer( { .size = 1024, .debug_name = "TestBuffer" } );
+    const auto handle = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer",
+    } );
 
     ASSERT_NE( handle.id, 0 );
-    EXPECT_NE(resource_manager_->get_buffer( handle ), VK_NULL_HANDLE);
+    EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 }
 
 TEST_F( ResourceManagerTestFixture, BufferHandlesUnique ) {
-    const auto first = resource_manager_->create_buffer( { .size = 1024, .debug_name = "TestBuffer" } );
-    const auto second = resource_manager_->create_buffer( { .size = 1024, .debug_name = "TestBuffer" } );
+    const auto first = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer",
+    } );
+    const auto second = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer2",
+    } );
 
     EXPECT_NE( first, second );
-    EXPECT_NE(resource_manager_->get_buffer( first ), VK_NULL_HANDLE);
-    EXPECT_NE(resource_manager_->get_buffer( second ), VK_NULL_HANDLE);
+    EXPECT_NE( resource_manager_->get_buffer( first ), VK_NULL_HANDLE );
+    EXPECT_NE( resource_manager_->get_buffer( second ), VK_NULL_HANDLE );
+}
+
+TEST_F( ResourceManagerTestFixture, FreeBuffer ) {
+    const auto handle = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer",
+    } );
+
+    EXPECT_NE( handle.id, 0 );
+    EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+
+    resource_manager_->free_buffer( handle );
+    EXPECT_EQ( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 }
 
 TEST_F( ResourceManagerTestFixture, CreateImage ) {
     const auto handle = resource_manager_->create_image( {
         .extent = { 1024, 1024, 1 },
         .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
     } );
 
     EXPECT_NE( handle.id, 0 );
-    EXPECT_NE(resource_manager_->get_image( handle ), VK_NULL_HANDLE);
+    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
 }
 
 TEST_F( ResourceManagerTestFixture, ImageHandlesUnique ) {
     const auto first = resource_manager_->create_image( {
         .extent = { 128, 128, 1 },
         .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
     } );
     const auto second = resource_manager_->create_image( {
         .extent = { 128, 128, 1 },
         .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
     } );
 
     EXPECT_NE( first, second );
-    EXPECT_NE(resource_manager_->get_image( first ), VK_NULL_HANDLE);
-    EXPECT_NE(resource_manager_->get_image( second ), VK_NULL_HANDLE);
+    EXPECT_NE( resource_manager_->get_image( first ), VK_NULL_HANDLE );
+    EXPECT_NE( resource_manager_->get_image( second ), VK_NULL_HANDLE );
 }
 
+TEST_F( ResourceManagerTestFixture, FreeImage ) {
+    const auto handle = resource_manager_->create_image( {
+        .extent = { 1024, 1024, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
+    } );
+
+    EXPECT_NE( handle.id, 0 );
+    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
+
+    resource_manager_->free_image( handle );
+    EXPECT_EQ( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
+}

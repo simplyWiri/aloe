@@ -52,6 +52,7 @@ public:
 private:
     static DebugInformation debug_info_;
 
+    bool enable_validation_ = false;
     VkInstance instance_ = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     std::vector<PhysicalDevice> physical_devices_;
@@ -68,6 +69,7 @@ public:
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
     VkDevice device() const { return device_; }
     VmaAllocator allocator() const { return allocator_; }
+    bool validation_enabled() const { return enable_validation_; }
 
     static const DebugInformation& debug_info() { return debug_info_; }
 private:
