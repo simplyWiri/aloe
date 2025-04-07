@@ -51,6 +51,34 @@ bool Swapchain::poll_events() {
     return glfwWindowShouldClose( window_ );
 }
 
+std::optional<RenderTarget> Swapchain::acquire_next_image( VkSemaphore image_available_semaphore ) {
+    const auto result = vkAcquireNextImageKHR( device_.device(),
+                                               swapchain_,
+                                               UINT64_MAX,
+                                               image_available_semaphore,
+                                               VK_NULL_HANDLE,
+                                               &current_image_index_ );
+    if ( result != VK_SUCCESS ) { return std::nullopt; }
+
+    return RenderTarget{
+        .image = images_[current_image_index_],
+        .view = image_views_[current_image_index_],
+    };
+}
+
+VkResult Swapchain::present( VkQueue queue, VkSemaphore wait_semaphore ) {
+    const VkPresentInfoKHR present_info = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &wait_semaphore,
+        .swapchainCount = 1,
+        .pSwapchains = &swapchain_,
+        .pImageIndices = &current_image_index_,
+    };
+
+    return vkQueuePresentKHR( queue, &present_info );
+}
+
 void Swapchain::resize() {
     vkDeviceWaitIdle( device_.device() );
 

@@ -10,13 +10,17 @@ protected:
     void SetUp() override {
         mock_logger_ = std::make_shared<aloe::MockLogger>();
         aloe::set_logger( mock_logger_ );
-        aloe::set_logger_level( aloe::LogLevel::Trace );
+        aloe::set_logger_level( aloe::LogLevel::Warn );
     }
 
     void TearDown() override {
-        const auto debug_info = aloe::Device::debug_info();
+        auto& debug_info = aloe::Device::debug_info();
         EXPECT_EQ( debug_info.num_warning, 0 );
         EXPECT_EQ( debug_info.num_error, 0 );
+
+        if ( debug_info.num_warning > 0 || debug_info.num_error > 0 ) {
+            for ( const auto& [level, message] : mock_logger_->get_entries() ) { std::cerr << message << std::endl; }
+        }
     }
 };
 

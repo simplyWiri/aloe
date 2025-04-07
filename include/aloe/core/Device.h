@@ -37,6 +37,12 @@ public:
         uint32_t num_unknown{ 0 };
     };
 
+    struct Queue {
+        VkQueue queue;
+        VkQueueFamilyProperties properties;
+        uint32_t family_index;
+    };
+private:
     struct PhysicalDevice {
         VkPhysicalDevice physical_device;
 
@@ -49,7 +55,6 @@ public:
         bool viable_device = true;
     };
 
-private:
     static DebugInformation debug_info_;
 
     bool enable_validation_ = false;
@@ -57,6 +62,7 @@ private:
     VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
     std::vector<PhysicalDevice> physical_devices_;
     VkDevice device_ = VK_NULL_HANDLE;
+    std::vector<Queue> queues_;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
 
 public:
@@ -70,12 +76,15 @@ public:
     VkDevice device() const { return device_; }
     VmaAllocator allocator() const { return allocator_; }
     bool validation_enabled() const { return enable_validation_; }
+    std::vector<Queue> queues_by_capability( VkQueueFlagBits capability ) const;
 
     static const DebugInformation& debug_info() { return debug_info_; }
+
 private:
     static VkResult create_instance( Device& device, const DeviceSettings& settings );
     static VkResult pick_physical_device( Device& device, const DeviceSettings& settings );
     static VkResult create_logical_device( Device& device, const DeviceSettings& settings );
+    static void gather_queues( Device& device );
     static VkResult create_allocator( Device& device );
     static VkBool32 debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                                     VkDebugUtilsMessageTypeFlagsEXT message_type,

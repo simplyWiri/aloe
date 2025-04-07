@@ -21,6 +21,11 @@ struct SwapchainSettings {
     bool use_hdr_surface = true;
 };
 
+struct RenderTarget {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+};
+
 // An abstraction which managers the window, input, surface & swapchain for Vulkan
 class Swapchain {
     constexpr static VkSurfaceFormatKHR hdr_target = { VK_FORMAT_A2B10G10R10_UNORM_PACK32,
@@ -42,6 +47,8 @@ class Swapchain {
     std::vector<VkImage> images_;
     std::vector<VkImageView> image_views_;
 
+    uint32_t current_image_index_ = 0;
+
 public:
     static tl::expected<std::unique_ptr<Swapchain>, VkResult> create_swapchain( const Device& device,
                                                                                 SwapchainSettings settings );
@@ -50,6 +57,8 @@ public:
 
     // Returns true we should exit the program
     bool poll_events();
+    std::optional<RenderTarget> acquire_next_image(VkSemaphore image_available_semaphore);
+    VkResult present( VkQueue queue, VkSemaphore wait_semaphore );
 
     GLFWwindow* window() const { return window_; }
 

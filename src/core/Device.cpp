@@ -35,10 +35,17 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
     result = create_logical_device( *device, settings );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
 
+    gather_queues( *device );
+
     result = create_allocator( *device );
     if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
 
     return device;
+}
+
+std::vector<Device::Queue> Device::queues_by_capability( VkQueueFlagBits capability ) const {
+    return queues_ | std::views::filter( [&]( auto& q ) { return q.properties.queueFlags & capability; } ) |
+        std::ranges::to<std::vector>();
 }
 
 VkResult Device::create_instance( Device& device, const DeviceSettings& settings ) {
@@ -248,6 +255,23 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
     };
 
     return vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
+}
+
+void Device::gather_queues( Device& device ) {
+    const auto& physical_device = device.physical_devices_.front();
+    const auto& queue_families = physical_device.queue_families;
+
+    for ( uint32_t i = 0; i < queue_families.size(); ++i ) {
+        for ( uint32_t j = 0; j < queue_families[i].queueCount; ++j ) {
+            auto& wrapper = device.queues_.emplace_back( Queue{
+                .queue = VK_NULL_HANDLE,
+                .properties = queue_families[i],
+                .family_index = i,
+            } );
+
+            vkGetDeviceQueue( device.device(), i, j, &wrapper.queue );
+        }
+    }
 }
 
 VkResult Device::create_allocator( Device& device ) {
