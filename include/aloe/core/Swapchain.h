@@ -75,7 +75,6 @@ private:
 
     // GLFW Callbacks
     static void glfw_error_callback( int error_code, const char* message );
-    static void window_position_callback( GLFWwindow* window, int x, int y );
     static void window_resized( GLFWwindow* window, int width, int height );
 
     Swapchain( const Device& device );

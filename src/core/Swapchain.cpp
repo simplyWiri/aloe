@@ -58,7 +58,7 @@ std::optional<RenderTarget> Swapchain::acquire_next_image( VkSemaphore image_ava
                                                image_available_semaphore,
                                                VK_NULL_HANDLE,
                                                &current_image_index_ );
-    if ( result != VK_SUCCESS ) { return std::nullopt; }
+    if ( result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR ) { return std::nullopt; }
 
     return RenderTarget{
         .image = images_[current_image_index_],

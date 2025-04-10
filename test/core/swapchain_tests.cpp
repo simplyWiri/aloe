@@ -133,31 +133,23 @@ TEST_F( SwapchainTestFixture, AcquireNextImageSucceeds ) {
 
 TEST_F( SwapchainTestFixture, AcquireNextImageFailsDueToResizeSucceeds ) {
     auto swapchain = *aloe::Swapchain::create_swapchain( *device_, {} );
-    auto* window = swapchain->window();
 
     int width, height;
-    glfwGetWindowSize( window, &width, &height );
-    // After this point `acquire_next_image` (which calls `vkAcquireNextImageKHR`) will fail, internally handling the
-    // `VK_SUBOPTIMAL_KHR`, and returning a std::nullopt.
-    glfwSetWindowSize( window, 0, 0 );
+    glfwGetWindowSize( swapchain->window(), &width, &height );
+    glfwSetWindowSize( swapchain->window(), 0, 0 );
 
     {
-        VkSemaphore image_avail_semaphore = create_semaphore();
-        const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
-        ASSERT_FALSE( render_target.has_value() ) << "Succeeding acquiring an image to an empty window";
+        const auto image_avail_semaphore = create_semaphore();
+        if ( swapchain->acquire_next_image( image_avail_semaphore ) == std::nullopt ) {
+            // If we fail to acquire the render target, we need to ensure that after it has been fixed, we can re-acquire with
+            // the same Semaphore.
 
-        vkDeviceWaitIdle( device_->device() );
-        destroy_semaphore( image_avail_semaphore );
-    }
+            glfwSetWindowSize( swapchain->window(), width, height );
+            swapchain->poll_events();
 
-    glfwSetWindowSize( window, width, height );
-    swapchain->poll_events();
-
-    // We need to use a new semaphore after one has failed, because the old one may be in an indeterminate state
-    {
-        VkSemaphore image_avail_semaphore = create_semaphore();
-        const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
-        ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
+            const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
+            ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
+        }
 
         vkDeviceWaitIdle( device_->device() );
         destroy_semaphore( image_avail_semaphore );
