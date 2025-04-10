@@ -20,7 +20,8 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
-        device_ = aloe::Device::create_device( { .enable_validation = false, .headless = true } ).value();
+        device_ =
+            std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = false, .headless = true } );
         pipeline_manager_ =
             std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
 

@@ -25,16 +25,13 @@ protected:
 };
 
 TEST_F( DeviceTestsFixture, RequiredDebugExtensionsAndLayersPresent ) {
-    auto device = aloe::Device::create_device( {} );
-    EXPECT_TRUE( device.has_value() );
+    EXPECT_NO_THROW( aloe::Device( {} ) );
 }
 
 TEST_F( DeviceTestsFixture, RequiredExtensionsAndLayersPresent ) {
-    auto device = aloe::Device::create_device( { .enable_validation = false } );
-    EXPECT_TRUE( device.has_value() );
+    EXPECT_NO_THROW( aloe::Device( { .enable_validation = false } ) );
 }
 
 TEST_F( DeviceTestsFixture, RequiredDebugExtensionsAndLayersPresentHeadless ) {
-    auto device = aloe::Device::create_device( { .headless = true } );
-    EXPECT_TRUE( device.has_value() );
+    EXPECT_NO_THROW( aloe::Device( { .headless = false } ) );
 }

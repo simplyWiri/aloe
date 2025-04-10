@@ -12,11 +12,7 @@ namespace aloe {
 
 Device::DebugInformation Device::debug_info_ = {};
 
-tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSettings settings ) {
-    // std::make_unique doesn't work when the class has a private constructor.
-    auto device = std::unique_ptr<Device>( new Device() );
-    device->enable_validation_ = settings.enable_validation;
-
+Device::Device( DeviceSettings settings ) : enable_validation_( settings.enable_validation ) {
     // Reset our debug info
     Device::debug_info_ = {};
 
@@ -26,21 +22,19 @@ tl::expected<std::unique_ptr<Device>, VkResult> Device::create_device( DeviceSet
     }
 
     // Initialize volk, create our VkInstance
-    auto result = create_instance( *device, settings );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    auto result = create_instance( *this, settings );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "Failed to create device instance" ); }
 
-    result = pick_physical_device( *device, settings );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    result = pick_physical_device( *this, settings );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "Failed to find a physical device" ); }
 
-    result = create_logical_device( *device, settings );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    result = create_logical_device( *this, settings );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "Failed to make a logical device" ); }
 
-    gather_queues( *device );
+    gather_queues( *this );
 
-    result = create_allocator( *device );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
-
-    return device;
+    result = create_allocator( *this );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "Failed to create a VMA Allocator" ); }
 }
 
 std::vector<Device::Queue> Device::queues_by_capability( VkQueueFlagBits capability ) const {
@@ -106,20 +100,24 @@ VkResult Device::create_instance( Device& device, const DeviceSettings& settings
     }
 
     result = vkCreateInstance( &instance_info, nullptr, &device.instance_ );
-    if ( result == VK_SUCCESS ) { volkLoadInstance( device.instance_ ); }
+    if ( result == VK_SUCCESS ) {
+        volkLoadInstance( device.instance_ );
 
-    if ( settings.enable_validation ) {
-        vkCreateDebugUtilsMessengerEXT( device.instance_, &debug_info, nullptr, &device.debug_messenger_ );
+        if ( settings.enable_validation ) {
+            result = vkCreateDebugUtilsMessengerEXT( device.instance_, &debug_info, nullptr, &device.debug_messenger_ );
+        }
+
+        log_write( LogLevel::Trace,
+                   "Successfully loaded Volk & created Vulkan instance, validation is {:s}, using instance layers: {}, "
+                   "and api version {}.{}.{}",
+                   settings.enable_validation ? "enabled" : "disabled",
+                   instance_extensions,
+                   VK_API_VERSION_MAJOR( app_info.apiVersion ),
+                   VK_API_VERSION_MINOR( app_info.apiVersion ),
+                   VK_API_VERSION_PATCH( app_info.apiVersion ) );
+    } else {
+        log_write( LogLevel::Error, "Failed to create a vulkan instance, error returned: {:s}", result );
     }
-
-    log_write( LogLevel::Trace,
-               "Successfully loaded Volk & created Vulkan instance, validation is {:s}, using instance layers: {}, "
-               "and api version {}.{}.{}",
-               settings.enable_validation ? "enabled" : "disabled",
-               instance_extensions,
-               VK_API_VERSION_MAJOR( app_info.apiVersion ),
-               VK_API_VERSION_MINOR( app_info.apiVersion ),
-               VK_API_VERSION_PATCH( app_info.apiVersion ) );
 
     return result;
 }
@@ -254,7 +252,11 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
         .pEnabledFeatures = &basic_features,
     };
 
-    return vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
+    const auto result = vkCreateDevice( physical_device.physical_device, &device_info, nullptr, &device.device_ );
+    if ( result != VK_SUCCESS ) {
+        log_write( LogLevel::Error, "Failed to create a vulkan logical device, error returned: {:s}", result );
+    }
+    return result;
 }
 
 void Device::gather_queues( Device& device ) {
@@ -303,14 +305,15 @@ VkResult Device::create_allocator( Device& device ) {
     vulkan_functions.vkGetDeviceBufferMemoryRequirements = vkGetDeviceBufferMemoryRequirements;
     vulkan_functions.vkGetDeviceImageMemoryRequirements = vkGetDeviceImageMemoryRequirements;
 
-    VmaAllocatorCreateInfo allocatorInfo = {};
-    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
-    allocatorInfo.device = device.device();
-    allocatorInfo.physicalDevice = device.physical_device();
-    allocatorInfo.instance = device.instance();
-    allocatorInfo.pVulkanFunctions = static_cast<const VmaVulkanFunctions*>( &vulkan_functions );
+    VmaAllocatorCreateInfo allocator_info = {
+        .physicalDevice = device.physical_device(),
+        .device = device.device(),
+        .pVulkanFunctions = static_cast<const VmaVulkanFunctions*>( &vulkan_functions ),
+        .instance = device.instance(),
+        .vulkanApiVersion = VK_API_VERSION_1_0,
+    };
 
-    return vmaCreateAllocator( &allocatorInfo, &device.allocator_ );
+    return vmaCreateAllocator( &allocator_info, &device.allocator_ );
 }
 
 constexpr LogLevel to_log_level( VkDebugUtilsMessageSeverityFlagBitsEXT severity ) {

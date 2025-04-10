@@ -42,6 +42,7 @@ public:
         VkQueueFamilyProperties properties;
         uint32_t family_index;
     };
+
 private:
     struct PhysicalDevice {
         VkPhysicalDevice physical_device;
@@ -67,9 +68,14 @@ private:
 
 public:
     // Attempt to construct a new device
-    static tl::expected<std::unique_ptr<Device>, VkResult> create_device( DeviceSettings settings );
+    Device(DeviceSettings settings);
     ~Device();
 
+    Device( Device& ) = delete;
+    Device& operator=( const Device& other ) = delete;
+
+    Device( Device&& ) = delete;
+    Device& operator=( Device&& other ) = delete;
 
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
@@ -90,9 +96,6 @@ private:
                                     VkDebugUtilsMessageTypeFlagsEXT message_type,
                                     const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
                                     void* );
-
-
-    Device() = default;
 };
 
 }// namespace aloe

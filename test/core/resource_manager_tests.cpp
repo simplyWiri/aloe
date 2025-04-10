@@ -15,7 +15,7 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
-        device_ = aloe::Device::create_device( { .enable_validation = true, .headless = true } ).value();
+        device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
         resource_manager_ = std::make_unique<aloe::ResourceManager>( *device_ );
     }
 

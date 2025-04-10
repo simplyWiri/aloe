@@ -62,7 +62,7 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
-        device_ = aloe::Device::create_device( {} ).value();
+        device_ = std::make_shared<aloe::Device>(aloe::DeviceSettings{});
 
         VkCommandPoolCreateInfo pool_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
