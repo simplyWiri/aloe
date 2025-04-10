@@ -54,6 +54,11 @@ public:
     Swapchain( const Device& device, SwapchainSettings settings );
     ~Swapchain();
 
+    Swapchain( Swapchain& ) = delete;
+    Swapchain& operator=( const Swapchain& other ) = delete;
+
+    Swapchain( Swapchain&& ) = delete;
+    Swapchain& operator=( Swapchain&& other ) = delete;
 
     // Returns true we should exit the program
     bool poll_events();

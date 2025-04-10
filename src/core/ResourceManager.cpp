@@ -1,5 +1,6 @@
 #include <aloe/core/Device.h>
 #include <aloe/core/ResourceManager.h>
+#include <aloe/util/log.h>
 
 #include <algorithm>
 #include <cassert>
@@ -20,16 +21,18 @@ ResourceManager::~ResourceManager() {
 
 BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
     VmaAllocationCreateInfo alloc_info{
+        .flags = desc.memory_flags,
         .usage = desc.memory_usage,
     };
 
-    AllocatedResource<VkBuffer> buffer;
+    AllocatedResource<VkBuffer, BufferDesc> buffer;
     VkBufferCreateInfo buffer_info{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = desc.size,
         .usage = desc.usage,
     };
 
+    buffer.desc = desc;
     const auto result =
         vmaCreateBuffer( allocator_, &buffer_info, &alloc_info, &buffer.resource, &buffer.allocation, nullptr );
     if ( result != VK_SUCCESS ) { return { 0 }; }
@@ -48,9 +51,12 @@ BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
 }
 
 ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
-    VmaAllocationCreateInfo alloc_info{ .usage = desc.memory_usage };
+    VmaAllocationCreateInfo alloc_info{
+        .flags = desc.memory_flags,
+        .usage = desc.memory_usage,
+    };
 
-    AllocatedResource<VkImage> image;
+    AllocatedResource<VkImage, ImageDesc> image;
     VkImageCreateInfo image_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
@@ -64,6 +70,7 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
 
+    image.desc = desc;
     const auto result =
         vmaCreateImage( allocator_, &image_info, &alloc_info, &image.resource, &image.allocation, nullptr );
     if ( result != VK_SUCCESS ) { return { 0 }; }
@@ -79,6 +86,64 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
     }
 
     return images_.emplace( ++current_image_id_, image ).first->first;
+}
+
+VkDeviceSize ResourceManager::upload_to_buffer( BufferHandle handle, const void* data, VkDeviceSize size ) {
+    const auto iter = buffers_.find( handle );
+    if ( iter == buffers_.end() ) {
+        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id );
+
+        return 0;
+    }
+
+    const auto& resource = iter->second;
+    if ( ( resource.desc.memory_flags &
+           ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
+        log_write( LogLevel::Error,
+                   "Trying to write to {}, which was not created with "
+                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
+                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
+                   resource.desc.name );
+
+        return 0;
+    }
+    void* dst_pointer = nullptr;
+    vmaMapMemory( allocator_, resource.allocation, &dst_pointer );
+    std::memcpy( dst_pointer, data, size );
+    vmaUnmapMemory( allocator_, resource.allocation );
+
+    return size;
+}
+
+VkDeviceSize ResourceManager::read_from_buffer( BufferHandle handle, void* out_data, VkDeviceSize bytes_to_read ) {
+    const auto iter = buffers_.find( handle );
+    if ( iter == buffers_.end() ) {
+        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id );
+        return 0;
+    }
+
+    const auto& resource = iter->second;
+    if ( ( resource.desc.memory_flags &
+           ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
+        log_write( LogLevel::Error,
+                   "Trying to write to {}, which was not created with "
+                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
+                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
+                   resource.desc.name );
+
+        return 0;
+    }
+
+    const auto read_bytes = std::min( resource.desc.size, bytes_to_read );
+
+    void* dst_pointer = nullptr;
+    vmaMapMemory( allocator_, resource.allocation, &dst_pointer );
+    std::memcpy( out_data, dst_pointer, read_bytes );
+    vmaUnmapMemory( allocator_, resource.allocation );
+
+    return read_bytes;
 }
 
 VkBuffer ResourceManager::get_buffer( BufferHandle handle ) {
