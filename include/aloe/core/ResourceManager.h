@@ -11,14 +11,14 @@ namespace aloe {
 class Device;
 
 struct BufferHandle {
-    const uint64_t id = 0;
+    uint64_t id = 0;
 
     uint64_t operator()() const { return id; }
     auto operator<=>( const BufferHandle& other ) const = default;
 };
 
 struct ImageHandle {
-    const uint64_t id = 0;
+    uint64_t id = 0;
 
     uint64_t operator()() const { return id; }
     auto operator<=>( const ImageHandle& other ) const = default;
