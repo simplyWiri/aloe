@@ -10,29 +10,24 @@
 
 namespace aloe {
 
-
-tl::expected<std::unique_ptr<Swapchain>, VkResult> Swapchain::create_swapchain( const Device& device,
-                                                                                SwapchainSettings settings ) {
-    // Set our error callback before we do any glfw function calls in the off chance they fail.
+Swapchain::Swapchain( const Device& device, SwapchainSettings settings )
+    : device_( device )
+    , use_hdr_( settings.use_hdr_surface ) {
     glfwSetErrorCallback( glfw_error_callback );
 
-    auto swapchain = std::unique_ptr<Swapchain>( new Swapchain( device ) );
-    swapchain->use_hdr_ = settings.use_hdr_surface;
+    auto result = create_window( *this, settings );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "failed to create window" ); }
 
-    auto result = create_window( *swapchain, settings );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    result = create_surface( device, *this );
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "failed to create surface" ); }
 
-    result = create_surface( device, *swapchain );
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    setup_callbacks( *this );
 
-    setup_callbacks( *swapchain );
-    result = swapchain->load_surface_capabilities();
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
+    result = load_surface_capabilities();
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "failed to load surface capabilities" ); }
 
-    result = swapchain->build_swapchain();
-    if ( result != VK_SUCCESS ) { return tl::make_unexpected( result ); }
-
-    return swapchain;
+    result = build_swapchain();
+    if ( result != VK_SUCCESS ) { throw std::runtime_error( "failed to build swapchain" ); }
 }
 
 Swapchain::~Swapchain() {
@@ -52,6 +47,8 @@ bool Swapchain::poll_events() {
 }
 
 std::optional<RenderTarget> Swapchain::acquire_next_image( VkSemaphore image_available_semaphore ) {
+    if ( error_state_ ) { return std::nullopt; }
+
     const auto result = vkAcquireNextImageKHR( device_.device(),
                                                swapchain_,
                                                UINT64_MAX,
@@ -67,6 +64,8 @@ std::optional<RenderTarget> Swapchain::acquire_next_image( VkSemaphore image_ava
 }
 
 VkResult Swapchain::present( VkQueue queue, VkSemaphore wait_semaphore ) {
+    if ( error_state_ ) { return VK_ERROR_SURFACE_LOST_KHR; }
+
     const VkPresentInfoKHR present_info = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
@@ -81,18 +80,19 @@ VkResult Swapchain::present( VkQueue queue, VkSemaphore wait_semaphore ) {
 
 void Swapchain::resize() {
     vkDeviceWaitIdle( device_.device() );
+    error_state_ = true;
 
     // They will have changed, when we receive this callback
-    auto result = load_surface_capabilities();
-    if ( result != VK_SUCCESS ) {
+    if ( auto result = load_surface_capabilities(); result == VK_SUCCESS ) {
+        if ( result = build_swapchain(); result != VK_SUCCESS ) {
+            log_write( LogLevel::Error, "Failed to rebuild swapchain following window resize, error: {}", result );
+        } else {
+            error_state_ = false;
+        }
+    } else {
         log_write( LogLevel::Error,
                    "Failed to reload surface capabilities following window resize, error: {}",
                    result );
-    }
-
-    result = build_swapchain();
-    if ( result != VK_SUCCESS ) {
-        log_write( LogLevel::Error, "Failed to rebuild swapchain following window resize, error: {}", result );
     }
 }
 
@@ -120,10 +120,10 @@ VkResult Swapchain::load_surface_capabilities() {
     auto sdr_supported = std::ranges::any_of( formats_, [&]( const VkSurfaceFormatKHR& format ) {
         return std::tie( format.format, format.colorSpace ) == std::tie( sdr_target.format, sdr_target.colorSpace );
     } );
-    auto supports_fifo = std::ranges::find( present_modes_, VK_PRESENT_MODE_FIFO_KHR ) != present_modes_.end();
+    auto supports_fifo = std::ranges::contains( present_modes_, VK_PRESENT_MODE_FIFO_KHR );
 
     log_write(
-        LogLevel::Info,
+        ( supports_fifo && sdr_supported ) ? LogLevel::Info : LogLevel::Error,
         "Loaded surface capabilities. Framebuffer extent: {}x{}. HDR target found: {}. SDR target found: {}. FIFO "
         "present mode supported: {}. Min image count: {}, Max image count: {}.",
         capabilities_.currentExtent.width,
@@ -168,7 +168,10 @@ VkResult Swapchain::build_swapchain() {
     };
 
     auto result = vkCreateSwapchainKHR( device_.device(), &swapchainCI, nullptr, &swapchain_ );
-    if ( result != VK_SUCCESS ) return result;
+    if ( result != VK_SUCCESS ) {
+        log_write( LogLevel::Error, "Failed to create a swapchain, error: {}", result );
+        return result;
+    }
 
     if ( old_swapchain != VK_NULL_HANDLE ) {
         for ( const auto& view : image_views_ ) { vkDestroyImageView( device_.device(), view, nullptr ); }
@@ -196,23 +199,23 @@ VkResult Swapchain::build_swapchain() {
         },
     };
 
-    for ( std::size_t i = 0; i < images_.size(); i++ ) {
-        view.image = images_[i];
+    for ( const auto& image : images_ ) {
+        view.image = image;
 
         auto& view_handle = image_views_.emplace_back();
-        if ( vkCreateImageView( device_.device(), &view, nullptr, &view_handle ) != VK_SUCCESS ) return result;
+        result = vkCreateImageView( device_.device(), &view, nullptr, &view_handle );
+        if ( result != VK_SUCCESS ) { log_write( LogLevel::Error, "Failed to create image view, error: {}", result ); }
+        return result;
     }
 
-    return images_.size() ? VK_SUCCESS : VK_ERROR_FORMAT_NOT_SUPPORTED;
+    return !images_.empty() ? VK_ERROR_FORMAT_NOT_SUPPORTED : VK_SUCCESS;
 }
 
 VkResult Swapchain::create_window( Swapchain& swapchain, const SwapchainSettings& settings ) {
     glfwWindowHint( GLFW_CLIENT_API, GLFW_NO_API );
 
     swapchain.window_ = glfwCreateWindow( settings.width, settings.height, settings.title, nullptr, nullptr );
-    if ( swapchain.window_ == nullptr ) return VkResult::VK_ERROR_INITIALIZATION_FAILED;
-
-    return VK_SUCCESS;
+    return swapchain.window_ ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
 }
 
 VkResult Swapchain::create_surface( const Device& device, Swapchain& swapchain ) {
@@ -247,9 +250,6 @@ void Swapchain::glfw_error_callback( int error_code, const char* message ) {
 void Swapchain::window_resized( GLFWwindow* window, int, int ) {
     // Resize gets the size of the swapchain from the surface, which is updated by GLFW.
     static_cast<Swapchain*>( glfwGetWindowUserPointer( window ) )->resize();
-}
-
-Swapchain::Swapchain( const Device& device ) : device_( device ) {
 }
 
 }// namespace aloe

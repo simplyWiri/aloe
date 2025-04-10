@@ -36,6 +36,7 @@ class Swapchain {
     bool use_hdr_{ false };
     GLFWwindow* window_{ nullptr };
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+    bool error_state_ = false;
 
     // Surface capabilities
     VkSurfaceCapabilitiesKHR capabilities_{};
@@ -50,8 +51,7 @@ class Swapchain {
     uint32_t current_image_index_ = 0;
 
 public:
-    static tl::expected<std::unique_ptr<Swapchain>, VkResult> create_swapchain( const Device& device,
-                                                                                SwapchainSettings settings );
+    Swapchain( const Device& device, SwapchainSettings settings );
     ~Swapchain();
 
 
@@ -76,8 +76,6 @@ private:
     // GLFW Callbacks
     static void glfw_error_callback( int error_code, const char* message );
     static void window_resized( GLFWwindow* window, int width, int height );
-
-    Swapchain( const Device& device );
 };
 
 }// namespace aloe
