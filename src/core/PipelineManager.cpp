@@ -109,22 +109,17 @@ PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_
 
 tl::expected<PipelineHandle, std::string>
 PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline ) {
-    auto module = compile_module( compute_pipeline.compute_shader );
-    if ( !module ) { return tl::make_unexpected( module.error() ); }
-
-    auto spirv = compile_spirv( *module, compute_pipeline.compute_shader.entry_point );
-    if ( !spirv ) {
-        return tl::make_unexpected(
-            std::format( "{}: error: {}", compute_pipeline.compute_shader.name, spirv.error() ) );
-    }
-
-    if ( const auto error = update_shader_dependency_graph( compute_pipeline.compute_shader.name, *module ) ) {
-        return tl::make_unexpected( error.value() );
-    }
-
     auto& state = get_pipeline_state( compute_pipeline );
+
+    if ( const auto module_error = compile_module( compute_pipeline.compute_shader ) ) {
+        return tl::make_unexpected( *module_error );
+    }
+
+    if ( const auto spirv_error = compile_spirv( compute_pipeline.compute_shader, state.spirv ) ) {
+        return tl::make_unexpected( *spirv_error );
+    }
+
     state.version++;
-    state.spirv = std::move( *spirv );
     return PipelineHandle{ state.id };
 }
 
@@ -197,115 +192,111 @@ PipelineManager::PipelineState& PipelineManager::get_pipeline_state( const Compu
     }
 }
 
-PipelineManager::ShaderState& PipelineManager::get_shader_state( const std::string& name ) {
+PipelineManager::ShaderState& PipelineManager::get_shader_state( const ShaderCompileInfo& info ) {
     auto iter =
-        std::ranges::find_if( shaders_, [&]( const std::unique_ptr<ShaderState>& s ) { return s->name == name; } );
-    if ( iter == shaders_.end() ) { return *shaders_.emplace_back( std::make_unique<ShaderState>( name ) ); }
+        std::ranges::find_if( shaders_, [&]( const std::unique_ptr<ShaderState>& s ) { return s->name == info.name; } );
+    if ( iter == shaders_.end() ) { return *shaders_.emplace_back( std::make_unique<ShaderState>( info.name ) ); }
     return **iter;
 }
 
-tl::expected<Slang::ComPtr<slang::IModule>, std::string>
-PipelineManager::compile_module( const ShaderCompileInfo& shader_info ) {
+std::optional<std::string> PipelineManager::compile_module( const ShaderCompileInfo& info ) {
+    auto& shader = get_shader_state( info );
+    shader.module = nullptr;
+
     const auto session = get_session();
-    if ( session == nullptr ) { return tl::make_unexpected( "Failed to get session" ); }
+    if ( session == nullptr ) { return "Failed to get session"; }
 
     Slang::ComPtr<SlangCompileRequest> slang_request = nullptr;
     if ( SLANG_FAILED( session->createCompileRequest( slang_request.writeRef() ) ) ) {
-        return tl::make_unexpected( "Failed to create compile request" );
+        return "Failed to create compile request";
     }
 
     // Compile our source file
-    const auto tu_index = slang_request->addTranslationUnit( SLANG_SOURCE_LANGUAGE_SLANG, shader_info.name.c_str() );
-    slang_request->addTranslationUnitSourceFile( tu_index, shader_info.name.c_str() );
+    const auto tu_index = slang_request->addTranslationUnit( SLANG_SOURCE_LANGUAGE_SLANG, info.name.c_str() );
+    slang_request->addTranslationUnitSourceFile( tu_index, info.name.c_str() );
 
     if ( SLANG_FAILED( slang_request->compile() ) ) {
         const auto diagnostics = std::string{ slang_request->getDiagnosticOutput() };
-        return tl::make_unexpected( "Failed to compile shader (" + shader_info.name + ": " + diagnostics );
+        return "Failed to compile shader (" + info.name + ": " + diagnostics;
     }
 
-    Slang::ComPtr<slang::IModule> module = nullptr;
-    if ( SLANG_FAILED( slang_request->getModule( tu_index, module.writeRef() ) ) ) {
+    // Compile the module for our shader
+    if ( SLANG_FAILED( slang_request->getModule( tu_index, shader.module.writeRef() ) ) ) {
         const auto diagnostics = std::string{ slang_request->getDiagnosticOutput() };
-        return tl::make_unexpected( "Failed to get module for compilation request (" + shader_info.name +
-                                    "), error: " + diagnostics );
+        return "Failed to get module for compilation request (" + info.name + "), error: " + diagnostics;
     }
 
-    Slang::ComPtr<slang::IBlob> diagnostics;
-    Slang::ComPtr<slang::IComponentType> linked_program = nullptr;
-    if ( SLANG_FAILED( module->link( linked_program.writeRef(), diagnostics.writeRef() ) ) ||
-         linked_program == nullptr ) {
-        const auto str = std::string{ static_cast<const char*>( diagnostics->getBufferPointer() ) };
-        return tl::make_unexpected( "Failed to link program" + str );
+    // Update the shaders compilation information
+    if ( const auto error = update_shader_dependency_graph( info ) ) {
+        return "Failed to iterate dependencies, error: " + *error;
     }
 
-    if ( const auto error = update_shader_dependency_graph( shader_info.name, module ) ) {
-        return tl::make_unexpected( "Failed to iterate dependencies, error: " + *error );
-    }
-
-    return module;
+    return std::nullopt;
 }
 
-tl::expected<std::vector<uint32_t>, std::string>
-PipelineManager::compile_spirv( const Slang::ComPtr<slang::IModule>& module, const std::string& entry_point_name ) {
+std::optional<std::string> PipelineManager::compile_spirv( const ShaderCompileInfo& info,
+                                                           std::vector<uint32_t>& spirv ) {
+    const auto& shader = get_shader_state( info );
+    assert( shader.module != nullptr );
+
     const auto session = get_session();
-    if ( session == nullptr ) { return tl::make_unexpected( "Failed to get session" ); }
+    if ( session == nullptr ) { return "Failed to get session"; }
 
     Slang::ComPtr<slang::IEntryPoint> entry_point = nullptr;
-    if ( SLANG_FAILED( ( module->findEntryPointByName( entry_point_name.c_str(), entry_point.writeRef() ) ) ) ) {
-        return tl::make_unexpected( std::format( "Could not find entry point {}", entry_point_name ) );
+    if ( SLANG_FAILED( ( shader.module->findEntryPointByName( info.entry_point.c_str(), entry_point.writeRef() ) ) ) ) {
+        return std::format( "Could not find entry point {}", info.entry_point );
     }
 
     Slang::ComPtr<slang::IBlob> diagnostics;
     Slang::ComPtr<slang::IComponentType> composite_program = nullptr;
-    slang::IComponentType* components[] = { module, entry_point.get() };
+    slang::IComponentType* components[] = { shader.module, entry_point.get() };
     if ( SLANG_FAILED( session->createCompositeComponentType( components,
                                                               2,
                                                               composite_program.writeRef(),
                                                               diagnostics.writeRef() ) ) ||
          composite_program == nullptr ) {
         const auto str = std::string{ static_cast<const char*>( diagnostics->getBufferPointer() ) };
-        return tl::make_unexpected( "Failed to create composite program: " + str );
+        return "Failed to create composite program: " + str;
     }
 
     Slang::ComPtr<slang::IComponentType> linked_program = nullptr;
     if ( SLANG_FAILED( composite_program->link( linked_program.writeRef(), diagnostics.writeRef() ) ) ||
          linked_program == nullptr ) {
         const auto str = std::string{ static_cast<const char*>( diagnostics->getBufferPointer() ) };
-        return tl::make_unexpected( "Failed to link program" + str );
+        return "Failed to link program" + str;
     }
 
     Slang::ComPtr<slang::IBlob> code = nullptr;
     if ( SLANG_FAILED( linked_program->getEntryPointCode( 0, 0, code.writeRef(), diagnostics.writeRef() ) ) ) {
         const auto str = std::string{ static_cast<const char*>( diagnostics->getBufferPointer() ) };
-        return tl::make_unexpected( "Failed to get entry point code blob, error: " + str );
+        return "Failed to get entry point code blob, error: " + str;
     }
 
     // `getBufferSize()` is in bytes, we cast the `void*` to u32 (spirv operand size), so we divide by 4 when we
     // do our pointer arithmetic, to avoid over-reading.
     const auto* code_ptr = static_cast<const uint32_t*>( code->getBufferPointer() );
-    return std::vector( code_ptr, code_ptr + ( code->getBufferSize() / 4 ) );
+    spirv.assign( code_ptr, code_ptr + ( code->getBufferSize() / 4 ) );
+
+    return std::nullopt;
 }
 
-std::optional<std::string>
-PipelineManager::update_shader_dependency_graph( const std::string& name,
-                                                 const Slang::ComPtr<slang::IModule>& module ) {
-    // We are being called directly from (`compile_shader`) - we may need to update our dependency information, even if
-    // we already have dependency information for `name`.
-    auto& shader = get_shader_state( name );
+std::optional<std::string> PipelineManager::update_shader_dependency_graph( const ShaderCompileInfo& info ) {
+    auto& shader = get_shader_state( info );
+    assert( shader.module != nullptr );
 
-    // Fix any links pointing to our current shader as a dependent (they may now be changed), clear our dependencies
+    // Fix any links pointing to our current shader as a dependent, as they may have been changed
     std::ranges::for_each( shader.dependencies, [&]( ShaderState* d ) { std::erase( d->dependents, &shader ); } );
     shader.dependencies.clear();
 
-    for ( auto i = 0; i < module->getDependencyFileCount(); ++i ) {
-        auto file = std::string{ module->getDependencyFilePath( i ) };
+    for ( auto i = 0; i < shader.module->getDependencyFileCount(); ++i ) {
+        auto file = std::string{ shader.module->getDependencyFilePath( i ) };
         if ( const auto dot_pos = file.find( '.' ); dot_pos != std::string_view::npos ) {
             if ( const auto colon_pos = file.find( ':', dot_pos ); colon_pos != std::string_view::npos ) {
                 file.erase( colon_pos );
             }
         }
 
-        auto& dependency_shader = get_shader_state( file );
+        auto& dependency_shader = get_shader_state( { .name = file } );
         if ( &dependency_shader == &shader ) { continue; }
 
         // Re-introduce our shader as a dependent of its dependencies
@@ -317,8 +308,8 @@ PipelineManager::update_shader_dependency_graph( const std::string& name,
 }
 
 void PipelineManager::recompile_dependents( const std::vector<std::string>& shader_paths ) {
-    const auto root_shaders =
-        shader_paths | std::views::transform( [&]( const auto& path ) { return &get_shader_state( path ); } );
+    const auto root_shaders = shader_paths |
+        std::views::transform( [&]( const auto& path ) { return &get_shader_state( { .name = path } ); } );
     const auto all_shaders = aloe::topological_sort( root_shaders );
     auto all_pipelines = pipelines_ | std::views::filter( [&]( const auto& pipeline ) {
                              return std::ranges::any_of( all_shaders, [&]( const auto* shader ) {

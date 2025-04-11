@@ -39,10 +39,13 @@ struct PipelineHandle {
 struct SlangFilesystem;
 
 class PipelineManager {
-    // Used for tracking dependencies between shaders, eventually used for automatic re-compilation of pipelines
     struct ShaderState {
         std::string name;
 
+        /// Slang State Tracking
+        Slang::ComPtr<slang::IModule> module = nullptr;
+
+        /// Shader Dependency Tracking
         // Which other shader(s) does this shader depend on
         std::vector<ShaderState*> dependencies{};
         // Which other shader(s) rely on this shader
@@ -96,16 +99,12 @@ private:
     // We need to rebuild our session when we change defines (as we ensure that all shaders are compiled with the same set of defines)
     Slang::ComPtr<slang::ISession> get_session();
     PipelineState& get_pipeline_state( const ComputePipelineInfo& pipeline_info );
-    ShaderState& get_shader_state( const std::string& path );
+    ShaderState& get_shader_state( const ShaderCompileInfo& path );
 
-    // Shader processing
-    tl::expected<Slang::ComPtr<slang::IModule>, std::string> compile_module( const ShaderCompileInfo& shader_info );
-
-    tl::expected<std::vector<uint32_t>, std::string> compile_spirv( const Slang::ComPtr<slang::IModule>& module,
-                                                                    const std::string& entry_point_name );
-
-    std::optional<std::string> update_shader_dependency_graph( const std::string& name,
-                                                               const Slang::ComPtr<slang::IModule>& shader );
+    // Shader processing, if string is returned - an error state has been set.
+    std::optional<std::string> compile_module( const ShaderCompileInfo& info );
+    std::optional<std::string> compile_spirv( const ShaderCompileInfo& info, std::vector<uint32_t>& spirv );
+    std::optional<std::string> update_shader_dependency_graph( const ShaderCompileInfo& info );
 
     void recompile_dependents( const std::vector<std::string>& shader_paths );
 };
