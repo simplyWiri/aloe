@@ -238,6 +238,10 @@ PipelineManager::compile_module( const ShaderCompileInfo& shader_info ) {
         return tl::make_unexpected( "Failed to link program" + str );
     }
 
+    if ( const auto error = update_shader_dependency_graph( shader_info.name, module ) ) {
+        return tl::make_unexpected( "Failed to iterate dependencies, error: " + *error );
+    }
+
     return module;
 }
 
@@ -307,18 +311,8 @@ PipelineManager::update_shader_dependency_graph( const std::string& name,
         // Re-introduce our shader as a dependent of its dependencies
         shader.dependencies.emplace_back( &dependency_shader );
         dependency_shader.dependents.emplace_back( &shader );
-
-        // If it has been loaded already, we don't need to do deeper processing.
-        if ( dependency_shader.been_loaded ) { continue; }
-
-        if ( const auto dep_module = compile_module( { dependency_shader.name } ) ) {
-            update_shader_dependency_graph( dependency_shader.name, *dep_module );
-        } else {
-            return std::format( "{}'s dependency {} failed to compile, error: {}", name, file, dep_module.error() );
-        }
     }
 
-    shader.been_loaded = true;
     return std::nullopt;
 }
 

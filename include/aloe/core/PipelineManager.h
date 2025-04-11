@@ -48,9 +48,6 @@ class PipelineManager {
         // Which other shader(s) rely on this shader
         std::vector<ShaderState*> dependents{};
 
-        // If we have compiled this shader yet
-        bool been_loaded = false;
-
         const std::vector<ShaderState*>& get_dependents() const;
     };
 
