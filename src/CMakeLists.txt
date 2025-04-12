@@ -25,7 +25,7 @@ aloe_add_library(vma
         VulkanMemoryAllocator
         volk
 )
-set_target_properties(vma PROPERTIES COMPILE_FLAGS "-w") # vma does not build cleanly.
+target_compile_options(vma PRIVATE -w) # vma does not build cleanly.
 
 aloe_add_library(aloe
     HEADERS

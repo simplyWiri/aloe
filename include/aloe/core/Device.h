@@ -79,6 +79,7 @@ public:
 
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physical_device() const { return physical_devices_.front().physical_device; }
+    VkPhysicalDeviceLimits get_physical_device_limits() { return physical_devices_.front().props.limits; }
     VkDevice device() const { return device_; }
     VmaAllocator allocator() const { return allocator_; }
     bool validation_enabled() const { return enable_validation_; }

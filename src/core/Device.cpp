@@ -233,6 +233,9 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &sync2,
         .descriptorIndexing = VK_TRUE,
+        .descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE,
+        .descriptorBindingPartiallyBound = VK_TRUE,
+        .runtimeDescriptorArray = VK_TRUE,
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
@@ -240,6 +243,7 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
     VkPhysicalDeviceFeatures basic_features{
         .shaderStorageImageReadWithoutFormat = VK_TRUE,
         .shaderStorageImageWriteWithoutFormat = VK_TRUE,
+        .shaderInt64 = VK_TRUE,
     };
 
     VkDeviceCreateInfo device_info{
