@@ -113,63 +113,6 @@ void PipelineManager::PipelineState::free_state( Device& device ) {
     compiled_shaders.clear();
 }
 
-std::optional<std::string> PipelineManager::PipelineState::build_uniforms() {
-    struct StageRange {
-        VkShaderStageFlags stage;
-        uint32_t begin;
-        uint32_t end;
-    };
-
-    std::vector<StageRange> ranges;
-    uint32_t global_max_offset = 0;
-
-    for ( const auto& shader : compiled_shaders ) {
-        if ( shader.uniforms.empty() ) continue;
-
-        uint32_t min_offset = std::numeric_limits<uint32_t>::max();
-        uint32_t max_offset = 0;
-
-        for ( const auto& u : shader.uniforms ) {
-            min_offset = std::min( min_offset, u.offset );
-            max_offset = std::max( max_offset, u.offset + u.size );
-        }
-
-        ranges.emplace_back( shader.stage, min_offset, max_offset );
-        global_max_offset = std::max( global_max_offset, max_offset );
-    }
-
-    // Check for overlaps between stage ranges
-    for ( size_t i = 0; i < ranges.size(); ++i ) {
-        for ( size_t j = i + 1; j < ranges.size(); ++j ) {
-            const auto& a = ranges[i];
-            const auto& b = ranges[j];
-
-            if ( a.begin < b.end && b.begin < a.end ) {
-                const auto a_name =
-                    std::ranges::find_if( compiled_shaders, [&]( const auto& s ) { return s.stage == a.stage; } )->name;
-                const auto b_name =
-                    std::ranges::find_if( compiled_shaders, [&]( const auto& s ) { return s.stage == b.stage; } )->name;
-
-                return std::format( "Overlapping stage push constant ranges:"
-                                    "\n\t{} ({}) uses range [{}, {})"
-                                    "\n\t{} ({}) uses range [{}, {})",
-                                    a_name,
-                                    a.stage,
-                                    a.begin,
-                                    a.end,
-                                    b_name,
-                                    b.stage,
-                                    b.begin,
-                                    b.end );
-            }
-        }
-    }
-
-    uniforms = UniformBlock{global_max_offset};
-
-    return std::nullopt;
-}
-
 bool PipelineManager::PipelineState::matches_shader( const ShaderState& shader ) const {
     return shader.name == info.compute_shader.name;
 }
@@ -212,7 +155,9 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
 
     state.compiled_shaders = { *compiled_shader };
 
-    if ( const auto uniform_error = state.build_uniforms() ) { return tl::make_unexpected( *uniform_error ); }
+    auto uniform_block = get_uniform_block( state.compiled_shaders );
+    if ( !uniform_block ) { return tl::make_unexpected( uniform_block.error() ); }
+    state.uniforms = std::move( *uniform_block );
 
     const auto pipeline_layout = get_pipeline_layout( { *compiled_shader } );
     if ( !pipeline_layout ) { return tl::make_unexpected( pipeline_layout.error() ); }
@@ -261,6 +206,10 @@ uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
 
 const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
+}
+
+UniformBlock& PipelineManager::get_uniform_block( PipelineHandle h ) {
+    return *pipelines_.at( h.id ).uniforms;
 }
 
 Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
@@ -634,6 +583,70 @@ PipelineManager::get_pipeline_layout( const std::vector<CompiledShaderState>& sh
     }
 
     return layout;
+}
+
+tl::expected<UniformBlock, std::string>
+PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shaders ) {
+    std::vector<UniformBlock::StageBinding> stage_bindings;
+    uint32_t global_max_offset = 0;// Tracks the highest byte offset needed across all stages
+
+    // track ranges per stage for overlap check (stage, min_offset, max_end_offset)
+    std::vector<std::tuple<VkShaderStageFlags, uint32_t, uint32_t>> stage_ranges;
+
+    for ( const auto& shader : shaders ) {
+        if ( shader.uniforms.empty() ) continue;
+
+        // Ensure uniforms are sorted by offset (should be guaranteed by reflect_module)
+        assert( std::ranges::is_sorted( shader.uniforms, {}, &CompiledShaderState::Uniform::offset ) );
+
+        const uint32_t stage_min_offset = shader.uniforms.front().offset;
+        const uint32_t stage_max_end_offset = shader.uniforms.back().offset + shader.uniforms.back().size;
+        const uint32_t stage_size = stage_max_end_offset - stage_min_offset;
+
+        assert( stage_size > 0 );
+
+        // Update the overall maximum offset needed for the whole block
+        global_max_offset = std::max( global_max_offset, stage_max_end_offset );
+
+        stage_bindings.emplace_back( shader.stage, stage_min_offset, stage_size );
+        stage_ranges.emplace_back( shader.stage, stage_min_offset, stage_max_end_offset );
+    }
+
+    for ( size_t i = 0; i + 1 < stage_ranges.size(); ++i ) {
+        const auto& [cur_stage, cur_min, cur_max] = stage_ranges[i];
+        const auto& [nxt_stage, nxt_min, nxt_max] = stage_ranges[i + 1];
+
+        // Check if current range's end overlaps next range's start
+        if ( cur_max > nxt_min ) {
+            // Find shader names for better error message
+            auto cur_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == cur_stage; } );
+            auto nxt_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == nxt_stage; } );
+
+            return tl::make_unexpected( std::format( "Overlapping push constant data ranges detected between stages:\n"
+                                                     "  Shader '{}' (Stage {}) uses range [{}, {})\n"
+                                                     "  Shader '{}' (Stage {}) uses range [{}, {})",
+                                                     cur_shader->name,
+                                                     cur_stage,
+                                                     cur_min,
+                                                     cur_max,
+                                                     nxt_shader->name,
+                                                     nxt_stage,
+                                                     nxt_min,
+                                                     nxt_max ) );
+        }
+    }
+
+    // --- Verify total size against device limits ---
+    if ( global_max_offset > device_.get_physical_device_limits().maxPushConstantsSize ) {
+        return tl::make_unexpected(
+            std::format( "Total push constant size required ({}) exceeds device limit (maxPushConstantsSize = {}).",
+                         global_max_offset,
+                         device_.get_physical_device_limits().maxPushConstantsSize ) );
+    }
+
+    // --- Construct UniformBlock if all checks pass ---
+    // Pass the bindings derived from reflection and the calculated total size
+    return UniformBlock( stage_bindings, global_max_offset );
 }
 
 }// namespace aloe

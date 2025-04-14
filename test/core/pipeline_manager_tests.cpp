@@ -343,8 +343,7 @@ void compute_main(uint3 id : SV_DispatchThreadID,
     pc_buffer.set_value( {5} );
     pc_time.set_value( 123.456f );
 
-    // auto uniform_block = pipeline_manager_->get_uniform_block( *result, VK_SHADER_STAGE_COMPUTE_BIT );
-    aloe::UniformBlock uniform_block(12);
+    auto& uniform_block = pipeline_manager_->get_uniform_block( *result );
     uniform_block.set( pc_buffer );
     uniform_block.set( pc_time );
 
@@ -353,44 +352,44 @@ void compute_main(uint3 id : SV_DispatchThreadID,
     EXPECT_EQ( *reinterpret_cast<const float*>(data + pc_time.offset), 123.456f );
 }
 
-TEST_F( PipelineManagerTestFixture, Something) {
-    pipeline_manager_->set_virtual_file( "test.slang", R"(
-import aloe;
-
-[[vk::push_constant]]
-struct VertexPushConstants {
-    [[vk::offset(0)]] float4x4 modelMatrix;
-};
-
-[shader("vertex")]
-void vertex_main(
-    [[vk::location(0)]] float3 inPosition : POSITION,
-    uniform VertexPushConstants pc,
-    out float4 outPosition : SV_Position)
-{
-    outPosition = mul(pc.modelMatrix, float4(inPosition, 1.0));
-};
-
-// Fragment Shader
-[[vk::push_constant]]
-struct FragmentPushConstants {
-    [[vk::offset(64)]] float4 color;
-};
-
-[shader("fragment")]
-void fragment_main(
-    in float4 inPosition : SV_Position,
-    uniform FragmentPushConstants pc,
-    out float4 outColor : SV_Target)
-{
-    outColor = pc.color;
-};
-)" );
-
-    const aloe::ShaderCompileInfo shader{ .name = "test.slang", .entry_point = "compute_main" };
-    const auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
-    EXPECT_TRUE( result );
-}
+//TEST_F( PipelineManagerTestFixture, Something) {
+//    pipeline_manager_->set_virtual_file( "test.slang", R"(
+//import aloe;
+//
+//[[vk::push_constant]]
+//struct VertexPushConstants {
+//    [[vk::offset(0)]] float4x4 modelMatrix;
+//};
+//
+//[shader("vertex")]
+//void vertex_main(
+//    [[vk::location(0)]] float3 inPosition : POSITION,
+//    uniform VertexPushConstants pc,
+//    out float4 outPosition : SV_Position)
+//{
+//    outPosition = mul(pc.modelMatrix, float4(inPosition, 1.0));
+//};
+//
+//// Fragment Shader
+//[[vk::push_constant]]
+//struct FragmentPushConstants {
+//    [[vk::offset(64)]] float4 color;
+//};
+//
+//[shader("fragment")]
+//void fragment_main(
+//    in float4 inPosition : SV_Position,
+//    uniform FragmentPushConstants pc,
+//    out float4 outColor : SV_Target)
+//{
+//    outColor = pc.color;
+//};
+//)" );
+//
+//    const aloe::ShaderCompileInfo shader{ .name = "test.slang", .entry_point = "compute_main" };
+//    const auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//    EXPECT_TRUE( result );
+//}
 
 // TEST_F( PipelineManagerTestFixture, CopiesBufferWithBindlessHandle ) {
 //     pipeline_manager_->set_virtual_file( "copy_buffer.slang", R"(

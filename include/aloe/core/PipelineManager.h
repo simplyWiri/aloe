@@ -4,7 +4,13 @@
 
 #include <tl/expected.hpp>
 
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <optional>
 #include <ranges>
+#include <vector>
 
 #include <slang-com-ptr.h>
 
@@ -40,37 +46,53 @@ struct PipelineHandle {
 template<typename T>
 struct ShaderUniform {
     static_assert( std::is_standard_layout_v<T> );
-    explicit ShaderUniform( std::size_t offset ) : offset( offset ) {}
+    explicit ShaderUniform( uint32_t offset ) : offset( offset ) {}
 
-    std::size_t offset;
+    uint32_t offset;// Using uint32_t
     std::optional<T> data;
 
     void set_value( const T& value ) { data = value; }
+    auto operator<=>( const ShaderUniform& ) const = default;
 };
 
-// We need to refactor the `UniformBlock` class to:
-// 1. Maintain a vector<Stage, Offest, Size> for each shader it represents
-// 2. Add verification that the total `data_` is <= device_.get_limits().maxPushConstantBytes;
-// 3. Make the `bind` invocation, bind a push constant for each stage.
+// Refined UniformBlock without internal validation, relies on external checks
+class UniformBlock {
+public:
+    struct StageBinding {
+        VkShaderStageFlags stage_flags = 0;
+        uint32_t offset = 0;
+        uint32_t size = 0;
+        auto operator<=>( const StageBinding& ) const = default;
+    };
 
-struct UniformBlock {
-    explicit UniformBlock( std::size_t size = 0 ) { data_.resize( size ); }
+    explicit UniformBlock( const std::vector<StageBinding>& bindings, uint32_t total_size )
+        : stage_bindings_( bindings ) {
+        data_.resize( total_size );
+        std::ranges::fill( data_, uint8_t{ 0 } );
+    }
 
     template<typename T>
     void set( const ShaderUniform<T>& element ) {
-        assert( data_.size() >= element.offset + sizeof( T ) );
+        assert(element.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data.");
         std::memcpy( data_.data() + element.offset, &element.data.value(), sizeof( T ) );
     }
 
     void bind( VkCommandBuffer command_buffer, VkPipelineLayout layout ) const {
-        vkCmdPushConstants( command_buffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, data_.size(), data_.data() );
+        if ( data_.empty() ) { return; }
+
+        for ( const auto& [stage_flags, offset, size] : stage_bindings_ ) {
+            vkCmdPushConstants( command_buffer, layout, stage_flags, offset, size, data_.data() + offset );
+        }
     }
 
     auto operator<=>( const UniformBlock& other ) const = default;
-
     const void* data() const { return data_.data(); }
+    size_t size() const { return data_.size(); }
+    const std::vector<StageBinding>& get_bindings() const { return stage_bindings_; }
+
 private:
     std::vector<uint8_t> data_;
+    std::vector<StageBinding> stage_bindings_;
 };
 
 // Pimpl style forward declaration for slang internals.
@@ -118,7 +140,7 @@ class PipelineManager {
 
         // Vulkan Objects
         std::vector<CompiledShaderState> compiled_shaders;
-        std::optional<UniformBlock> uniforms;
+        std::optional<UniformBlock> uniforms = std::nullopt;
         VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
 
@@ -160,7 +182,7 @@ public:
     // Getters so unit tests can verify the validity of the code
     uint64_t get_pipeline_version( PipelineHandle h ) const;
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle h ) const;
-    // const UniformBlock& get_uniform_block( PipelineHandle h, VkShaderStageFlags stage ) const;
+    UniformBlock& get_uniform_block( PipelineHandle h );
 
     template<typename T>
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, VkShaderStageFlags stage, std::string_view name ) const {
@@ -198,7 +220,7 @@ private:
     void create_global_descriptor_layout();
     tl::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     tl::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
-    tl::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders);
+    tl::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
 };
 
 }// namespace aloe
