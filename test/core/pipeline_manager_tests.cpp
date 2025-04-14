@@ -33,6 +33,9 @@ protected:
     }
 
     void TearDown() override {
+        pipeline_manager_.reset();
+        device_.reset( nullptr );
+
         auto& debug_info = aloe::Device::debug_info();
         EXPECT_EQ( debug_info.num_warning, 0 );
         EXPECT_EQ( debug_info.num_error, 0 );

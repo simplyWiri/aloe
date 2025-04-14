@@ -30,6 +30,8 @@ protected:
         // There should be zero dangling allocations
         EXPECT_EQ( stats.total.statistics.allocationCount, 0 );
 
+        device_.reset( nullptr );
+
         // No validation errors
         auto& debug_info = aloe::Device::debug_info();
         EXPECT_EQ( debug_info.num_warning, 0 );

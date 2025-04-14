@@ -1,6 +1,7 @@
 #include <aloe/core/PipelineManager.h>
 #include <aloe/util/algorithms.h>
 #include <aloe/util/log.h>
+#include <aloe/util/vulkan_util.h>
 
 #include <slang.h>
 
@@ -93,6 +94,16 @@ const std::vector<PipelineManager::ShaderState*>& PipelineManager::ShaderState::
     return dependents;
 }
 
+void PipelineManager::PipelineState::free_state( Device& device ) {
+    for ( auto& shader : compiled_shaders ) {
+        if ( shader.shader_module != VK_NULL_HANDLE ) {
+            vkDestroyShaderModule( device.device(), shader.shader_module, nullptr );
+        }
+    }
+
+    compiled_shaders.clear();
+}
+
 bool PipelineManager::PipelineState::matches_shader( const ShaderState& shader ) const {
     return shader.name == info.compute_shader.name;
 }
@@ -107,18 +118,19 @@ PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_
     filesystem_ = std::make_shared<SlangFilesystem>( root_paths_ );
 }
 
+PipelineManager::~PipelineManager() {
+    for ( auto& pipeline : pipelines_ ) { pipeline.free_state( device_ ); }
+}
+
 std::expected<PipelineHandle, std::string>
 PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline ) {
     auto& state = get_pipeline_state( compute_pipeline );
+    state.free_state( device_ );// if we are re-compiling, ensure we free our prior (i.a) state
 
-    if ( const auto module_error = compile_module( compute_pipeline.compute_shader ) ) {
-        return std::unexpected( *module_error );
-    }
+    const auto compiled_shader = get_compiled_shader( compute_pipeline.compute_shader );
+    if ( !compiled_shader ) { return std::unexpected( compiled_shader.error() ); }
 
-    if ( const auto spirv_error = compile_spirv( compute_pipeline.compute_shader, state.spirv ) ) {
-        return std::unexpected( *spirv_error );
-    }
-
+    state.compiled_shaders = { *compiled_shader };
     state.version++;
     return PipelineHandle{ state.id };
 }
@@ -143,7 +155,7 @@ uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
 }
 
 const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
-    return pipelines_.at( handle.id ).spirv;
+    return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
 }
 
 Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
@@ -319,6 +331,46 @@ void PipelineManager::recompile_dependents( const std::vector<std::string>& shad
 
 
     for ( const auto& pipeline : all_pipelines ) { compile_pipeline( pipeline.info ); }
+}
+
+std::expected<PipelineManager::CompiledShaderState, std::string>
+PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
+    CompiledShaderState compiled_shader = {};
+    compiled_shader.name = info.name;
+
+    if ( const auto module_error = compile_module( info ) ) { return std::unexpected( *module_error ); }
+    if ( const auto spirv_error = compile_spirv( info, compiled_shader.spirv ) ) {
+        return std::unexpected( *spirv_error );
+    }
+
+    // todo: Populate our uniforms
+
+    // Compile our `VkShaderModule`
+    VkShaderModuleCreateInfo create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = compiled_shader.spirv.size() * sizeof( uint32_t ),
+        .pCode = compiled_shader.spirv.data(),
+    };
+
+    const auto result = vkCreateShaderModule( device_.device(), &create_info, nullptr, &compiled_shader.shader_module );
+    if ( result != VK_SUCCESS ) {
+        return std::unexpected( std::format( "Failed to create shader module, error: {}", result ) );
+    }
+
+    if ( device_.validation_enabled() ) {
+        const auto name = std::format( "{}:{}", info.name, info.entry_point );
+
+        VkDebugUtilsObjectNameInfoEXT debug_name_info{
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType = VK_OBJECT_TYPE_SHADER_MODULE,
+            .objectHandle = reinterpret_cast<uint64_t>( compiled_shader.shader_module ),
+            .pObjectName = name.c_str(),
+        };
+
+        vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
+    }
+
+    return compiled_shader;
 }
 
 }// namespace aloe

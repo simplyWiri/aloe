@@ -41,6 +41,9 @@ struct PipelineHandle {
 struct SlangFilesystem;
 
 class PipelineManager {
+    // Represents a shader file on disk, that has been linked to its dependencies, but has not yet been
+    // compiled for a particular entry point, you need an `entry_point` name to turn this into a
+    // `CompiledShaderState` object.
     struct ShaderState {
         std::string name;
 
@@ -56,14 +59,24 @@ class PipelineManager {
         const std::vector<ShaderState*>& get_dependents() const;
     };
 
+    // Represents a shader that has been compiled for a given entry point (& stage)
+    struct CompiledShaderState {
+        std::string name; // maps to `ShaderState::name`
+
+        VkShaderModule shader_module = VK_NULL_HANDLE;
+        std::vector<uint32_t> spirv; // todo: not necessary to store, stored for tests.
+
+        auto operator<=>( const CompiledShaderState& other ) const = default;
+    };
+
     struct PipelineState {
         uint32_t id;
         uint32_t version;
         ComputePipelineInfo info;
 
-        // todo: Vulkan objects (VkPipeline)
-        std::vector<uint32_t> spirv;
+        std::vector<CompiledShaderState> compiled_shaders;
 
+        void free_state( Device& device );
         bool matches_shader( const ShaderState& shader ) const;
         auto operator<=>( const PipelineState& other ) const = default;
     };
@@ -83,7 +96,7 @@ class PipelineManager {
 
 public:
     PipelineManager( Device& device, std::vector<std::string> root_paths );
-    ~PipelineManager() = default;
+    ~PipelineManager();
 
     // Primary method for interaction with the API
     std::expected<PipelineHandle, std::string> compile_pipeline( const ComputePipelineInfo& pipeline_info );
@@ -109,6 +122,8 @@ private:
     std::optional<std::string> update_shader_dependency_graph( const ShaderCompileInfo& info );
 
     void recompile_dependents( const std::vector<std::string>& shader_paths );
+
+    std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
 };
 
 }// namespace aloe
