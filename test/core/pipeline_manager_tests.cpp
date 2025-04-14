@@ -20,8 +20,7 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
-        device_ =
-            std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
+        device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
         pipeline_manager_ =
             std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
 
@@ -53,6 +52,21 @@ protected:
                 << "SPIR-V validation failed for pipeline compiled from: " << info.compute_shader.name;
         }
         return result;
+    }
+
+    std::string make_compute_shader( const std::string& body,
+                                     const std::string& uniforms = "",
+                                     const std::string& entry_point = "compute_main" ) {
+        return std::format( R"(
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void {}(uint3 id : SV_DispatchThreadID{}) {{
+    {}
+}}
+)",
+                            entry_point,
+                            uniforms.empty() ? "" : ( ", " + uniforms ),
+                            body );
     }
 };
 
@@ -326,3 +340,126 @@ TEST_F( PipelineManagerTestFixture, CircularIncludesHandledGracefully ) {
                  handle.error().find( "cycle" ) != std::string::npos ||
                  handle.error().find( "import" ) != std::string::npos );
 }
+
+
+TEST_F( PipelineManagerTestFixture, UniformBlockBasicCompute ) {
+    pipeline_manager_->set_virtual_file(
+        "basic_uniform.slang",
+        make_compute_shader( "// body irrelevant", "uniform float time, uniform int frameCount" ) );
+
+    const aloe::ShaderCompileInfo shader{ .name = "basic_uniform.slang", .entry_point = "compute_main" };
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle ) << handle.error();
+
+    // 1. Get Handles and check offsets (Slang determines actual offsets)
+    auto h_time = pipeline_manager_->get_uniform_handle<float>( *handle, VK_SHADER_STAGE_COMPUTE_BIT, "time" );
+    auto h_frame = pipeline_manager_->get_uniform_handle<int>( *handle, VK_SHADER_STAGE_COMPUTE_BIT, "frameCount" );
+
+    // Ensure offsets are distinct and reasonable (depends on packing rules)
+    EXPECT_NE( h_time.offset, h_frame.offset );
+    EXPECT_LT( h_time.offset, 16 );// Likely within first few bytes
+    EXPECT_LT( h_frame.offset, 16 );
+
+    // 2. Get the UniformBlock
+    auto& block = pipeline_manager_->get_uniform_block( *handle );
+
+    // 3. Verify Block Size and Bindings
+    // Size depends on packing, expect at least sizeof(float) + sizeof(int) = 8
+    // Slang might align frameCount to 4 bytes after time, so expect 8.
+    const uint32_t expected_size = h_frame.offset + sizeof( int );// Assumes frameCount is last
+    ASSERT_EQ( block.size(), expected_size );
+    ASSERT_EQ( block.get_bindings().size(), 1 );// One binding for compute stage
+
+    const auto& binding = block.get_bindings()[0];
+    EXPECT_EQ( binding.stage_flags, VK_SHADER_STAGE_COMPUTE_BIT );
+    EXPECT_EQ( binding.offset, h_time.offset );               // Starts at the first uniform's offset
+    EXPECT_EQ( binding.size, expected_size - binding.offset );// Covers the whole range used by compute
+
+    // 4. Set Data
+    block.set( h_time.set_value( 123.45f ) );
+    block.set( h_frame.set_value( 99 ) );
+
+    // 5. Verify Memory Contents
+    const auto* raw_data = static_cast<const uint8_t*>( block.data() );
+    EXPECT_FLOAT_EQ( *reinterpret_cast<const float*>( raw_data + h_time.offset ), 123.45f );
+    EXPECT_EQ( *reinterpret_cast<const int*>( raw_data + h_frame.offset ), 99 );
+}
+
+// Test reflection of a struct uniform
+TEST_F( PipelineManagerTestFixture, UniformBlockStruct ) {
+    struct MyParams {
+        float intensity;
+        int mode;
+    };
+
+    pipeline_manager_->set_virtual_file( "struct_uniform.slang",
+                                         "struct MyParams { float intensity; int mode; };\n" +
+                                             make_compute_shader( "// body", "uniform MyParams params" ) );
+
+    const aloe::ShaderCompileInfo shader{ .name = "struct_uniform.slang", .entry_point = "compute_main" };
+    const auto result = compile_and_validate( { shader } );
+    ASSERT_TRUE( result ) << result.error();
+
+    auto h_params = pipeline_manager_->get_uniform_handle<MyParams>( *result, VK_SHADER_STAGE_COMPUTE_BIT, "params" );
+    EXPECT_EQ( h_params.offset, 0 );
+
+    auto& block = pipeline_manager_->get_uniform_block( *result );
+    // Slang should ensure standard layout packing (e.g., std140/std430 rules might apply depending on context,
+    // but for push constants it's often tightly packed or uses explicit offsets). Assuming tight packing here.
+    ASSERT_EQ( block.size(), sizeof( MyParams ) );
+    ASSERT_EQ( block.get_bindings().size(), 1 );
+
+    const auto& binding = block.get_bindings().front();
+    EXPECT_EQ( binding.stage_flags, VK_SHADER_STAGE_COMPUTE_BIT );
+    EXPECT_EQ( binding.offset, 0 );
+    EXPECT_EQ( binding.size, sizeof( MyParams ) );
+
+    MyParams test_data = { 0.75f, 2 };
+    block.set( h_params.set_value( test_data ) );
+
+    const auto* raw_data = static_cast<const uint8_t*>( block.data() ) + h_params.offset;
+    const auto* cpu_data = reinterpret_cast<const uint8_t*>( &test_data );
+    const auto raw_slice = std::span( raw_data, binding.size );
+    const auto cpu_slice = std::span( cpu_data, binding.size );
+    EXPECT_TRUE( std::ranges::equal( raw_slice, cpu_slice ) );
+}
+
+// Test pipeline compilation fails if uniforms exceed maxPushConstantSize
+TEST_F( PipelineManagerTestFixture, UniformBlockExceedsSizeLimit ) {
+    const auto large_size = device_->get_physical_device_limits().maxPushConstantsSize + 4;
+
+    // Define a struct that is guaranteed to be larger than the limit
+    const auto shader_code =
+        std::format( "struct BigStruct {{ float data[{}]; }};\n", large_size / sizeof( float ) + 1 ) +
+        make_compute_shader( "// body", "uniform BigStruct large_uniform" );
+
+    pipeline_manager_->set_virtual_file( "large_uniform.slang", shader_code );
+
+    const aloe::ShaderCompileInfo shader{ .name = "large_uniform.slang", .entry_point = "compute_main" };
+    const auto result = compile_and_validate( { shader } );
+
+    ASSERT_FALSE( result );// Expect failure
+    EXPECT_NE( result.error().find( "exceeds device limit" ), std::string::npos );
+    EXPECT_NE( result.error().find( std::to_string( device_->get_physical_device_limits().maxPushConstantsSize ) ),
+               std::string::npos );
+}
+
+
+// Test case for a shader with no uniforms at all
+TEST_F( PipelineManagerTestFixture, UniformBlockNoUniforms ) {
+    pipeline_manager_->set_virtual_file( "no_uniform.slang", make_compute_shader( "// body" ) );
+
+    const aloe::ShaderCompileInfo shader{ .name = "no_uniform.slang", .entry_point = "compute_main" };
+    const auto result = compile_and_validate( { shader } );
+    ASSERT_TRUE( result ) << result.error();
+
+    // Get the block - should exist but be empty
+    auto& block = pipeline_manager_->get_uniform_block( *result );
+    EXPECT_EQ( block.size(), 0 );               // Expect zero size
+    EXPECT_TRUE( block.get_bindings().empty() );// Expect no bindings
+}
+
+// todo:
+// 1. Test usage of a shared resource (i.e. aloe::BufferHandle) as a uniform :y:
+// 2. Test usage of overlapping ranges once graphics pipelines are supported :y:
+// 3. Test usage of equivalent ranges once graphics pipelines are supported :n:

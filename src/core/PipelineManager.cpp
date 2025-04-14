@@ -127,10 +127,16 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
     auto& state = get_pipeline_state( compute_pipeline );
     state.free_state( device_ );// if we are re-compiling, ensure we free our prior (i.a) state
 
+    // Compile our shader for the pipeline
     const auto compiled_shader = get_compiled_shader( compute_pipeline.compute_shader );
     if ( !compiled_shader ) { return std::unexpected( compiled_shader.error() ); }
-
     state.compiled_shaders = { *compiled_shader };
+
+    // Reflect and ensure that our uniform blocks (push constants) do not overlap.
+    auto uniform_block = get_uniform_block( state.compiled_shaders );
+    if ( !uniform_block ) { return std::unexpected( uniform_block.error() ); }
+    state.uniforms = std::move( *uniform_block );
+
     state.version++;
     return PipelineHandle{ state.id };
 }
@@ -156,6 +162,11 @@ uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
 
 const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
+}
+
+UniformBlock& PipelineManager::get_uniform_block( PipelineHandle handle ) {
+    assert( pipelines_.at( handle.id ).uniforms );
+    return *pipelines_.at( handle.id ).uniforms;
 }
 
 Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
@@ -218,23 +229,22 @@ std::optional<std::string> PipelineManager::compile_module( const ShaderCompileI
     const auto session = get_session();
     if ( session == nullptr ) { return "Failed to get session"; }
 
-    Slang::ComPtr<SlangCompileRequest> slang_request = nullptr;
-    if ( SLANG_FAILED( session->createCompileRequest( slang_request.writeRef() ) ) ) {
+    if ( SLANG_FAILED( session->createCompileRequest( shader.compile_request.writeRef() ) ) ) {
         return "Failed to create compile request";
     }
 
     // Compile our source file
-    const auto tu_index = slang_request->addTranslationUnit( SLANG_SOURCE_LANGUAGE_SLANG, info.name.c_str() );
-    slang_request->addTranslationUnitSourceFile( tu_index, info.name.c_str() );
+    const auto tu_index = shader.compile_request->addTranslationUnit( SLANG_SOURCE_LANGUAGE_SLANG, info.name.c_str() );
+    shader.compile_request->addTranslationUnitSourceFile( tu_index, info.name.c_str() );
 
-    if ( SLANG_FAILED( slang_request->compile() ) ) {
-        const auto diagnostics = std::string{ slang_request->getDiagnosticOutput() };
+    if ( SLANG_FAILED( shader.compile_request->compile() ) ) {
+        const auto diagnostics = std::string{ shader.compile_request->getDiagnosticOutput() };
         return "Failed to compile shader (" + info.name + ": " + diagnostics;
     }
 
     // Compile the module for our shader
-    if ( SLANG_FAILED( slang_request->getModule( tu_index, shader.module.writeRef() ) ) ) {
-        const auto diagnostics = std::string{ slang_request->getDiagnosticOutput() };
+    if ( SLANG_FAILED( shader.compile_request->getModule( tu_index, shader.module.writeRef() ) ) ) {
+        const auto diagnostics = std::string{ shader.compile_request->getDiagnosticOutput() };
         return "Failed to get module for compilation request (" + info.name + "), error: " + diagnostics;
     }
 
@@ -333,6 +343,42 @@ void PipelineManager::recompile_dependents( const std::vector<std::string>& shad
     for ( const auto& pipeline : all_pipelines ) { compile_pipeline( pipeline.info ); }
 }
 
+void PipelineManager::reflect_module( const ShaderCompileInfo& info, CompiledShaderState& state ) {
+    constexpr auto from_slang_stage = []( SlangStage stage ) -> VkShaderStageFlags {
+        switch ( stage ) {
+            case SlangStage::SLANG_STAGE_VERTEX: return VK_SHADER_STAGE_VERTEX_BIT;
+            case SlangStage::SLANG_STAGE_FRAGMENT: return VK_SHADER_STAGE_FRAGMENT_BIT;
+            case SlangStage::SLANG_STAGE_COMPUTE: return VK_SHADER_STAGE_COMPUTE_BIT;
+            default:
+                log_write( LogLevel::Error,
+                           "Can not translate slang stage {} - returning `STAGE_ALL`",
+                           static_cast<int>( stage ) );
+        }
+
+        return VK_SHADER_STAGE_ALL;
+    };
+
+    const auto& shader = get_shader_state( info );
+
+    auto* reflection = reinterpret_cast<slang::ShaderReflection*>( shader.compile_request->getReflection() );
+    auto* entry_point_reflection = reflection->findEntryPointByName( info.entry_point.c_str() );
+
+    state.stage = from_slang_stage( entry_point_reflection->getStage() );
+
+    for ( uint32_t i = 0; i < entry_point_reflection->getParameterCount(); ++i ) {
+        const auto& param = entry_point_reflection->getParameterByIndex( i );
+
+        if ( param->getCategory() == slang::Uniform ) {
+            auto& uniform = state.uniforms.emplace_back();
+            uniform.name = param->getName();
+            uniform.offset = param->getOffset();
+            uniform.size = param->getTypeLayout()->getSize();
+        }
+    }
+
+    assert( std::ranges::is_sorted( state.uniforms ) );
+}
+
 std::expected<PipelineManager::CompiledShaderState, std::string>
 PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
     CompiledShaderState compiled_shader = {};
@@ -343,7 +389,8 @@ PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
         return std::unexpected( *spirv_error );
     }
 
-    // todo: Populate our uniforms
+    // Populate our uniforms
+    reflect_module( info, compiled_shader );
 
     // Compile our `VkShaderModule`
     VkShaderModuleCreateInfo create_info{
@@ -371,6 +418,68 @@ PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
     }
 
     return compiled_shader;
+}
+
+std::expected<UniformBlock, std::string>
+PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shaders ) {
+    std::vector<UniformBlock::StageBinding> stage_bindings;
+    uint32_t global_max_offset = 0;// Tracks the highest byte offset needed across all stages
+
+    // track ranges per stage for overlap check (stage, min_offset, max_end_offset)
+    std::vector<std::tuple<VkShaderStageFlags, uint32_t, uint32_t>> stage_ranges;
+
+    for ( const auto& shader : shaders ) {
+        if ( shader.uniforms.empty() ) continue;
+
+        // Ensure uniforms are sorted by offset (should be guaranteed by reflect_module)
+        assert( std::ranges::is_sorted( shader.uniforms, {}, &CompiledShaderState::Uniform::offset ) );
+
+        const uint32_t stage_min_offset = shader.uniforms.front().offset;
+        const uint32_t stage_max_end_offset = shader.uniforms.back().offset + shader.uniforms.back().size;
+        const uint32_t stage_size = stage_max_end_offset - stage_min_offset;
+
+        assert( stage_size > 0 );
+
+        // Update the overall maximum offset needed for the whole block
+        global_max_offset = std::max( global_max_offset, stage_max_end_offset );
+
+        stage_bindings.emplace_back( shader.stage, stage_min_offset, stage_size );
+        stage_ranges.emplace_back( shader.stage, stage_min_offset, stage_max_end_offset );
+    }
+
+    for ( size_t i = 0; i + 1 < stage_ranges.size(); ++i ) {
+        const auto& [cur_stage, cur_min, cur_max] = stage_ranges[i];
+        const auto& [nxt_stage, nxt_min, nxt_max] = stage_ranges[i + 1];
+
+        // Check if current range's end overlaps next range's start
+        if ( cur_max > nxt_min ) {
+            // Find shader names for better error message
+            auto cur_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == cur_stage; } );
+            auto nxt_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == nxt_stage; } );
+
+            return std::unexpected( std::format( "Overlapping push constant data ranges detected between stages:\n"
+                                                 "  Shader '{}' (Stage {}) uses range [{}, {})\n"
+                                                 "  Shader '{}' (Stage {}) uses range [{}, {})",
+                                                 cur_shader->name,
+                                                 cur_stage,
+                                                 cur_min,
+                                                 cur_max,
+                                                 nxt_shader->name,
+                                                 nxt_stage,
+                                                 nxt_min,
+                                                 nxt_max ) );
+        }
+    }
+
+    // Check if we are trying to create a push constant greater than our physical device capacities
+    if ( global_max_offset > device_.get_physical_device_limits().maxPushConstantsSize ) {
+        return std::unexpected(
+            std::format( "Total push constant size required ({}) exceeds device limit (maxPushConstantsSize = {}).",
+                         global_max_offset,
+                         device_.get_physical_device_limits().maxPushConstantsSize ) );
+    }
+
+    return UniformBlock( stage_bindings, global_max_offset );
 }
 
 }// namespace aloe
