@@ -1,9 +1,5 @@
 message("[aloe] --- Adding external dependencies ---")
 
-message("++++++ tl::expected (Functional style error handling)")
-set(EXPECTED_BUILD_TESTS)
-add_subdirectory(expected EXCLUDE_FROM_ALL)
-
 message("++++++ Volk (Meta loader for Vulkan functions)")
 add_subdirectory(volk EXCLUDE_FROM_ALL)
 

@@ -40,7 +40,6 @@ aloe_add_library(aloe
         core/Swapchain.cpp
     LINK_AGAINST
         glfw
-        tl::expected
         vma
         volk
 )

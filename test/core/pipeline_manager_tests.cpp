@@ -21,7 +21,7 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
         device_ =
-            std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = false, .headless = true } );
+            std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
         pipeline_manager_ =
             std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
 
@@ -41,6 +41,16 @@ protected:
             for ( const auto& [level, message] : mock_logger_->get_entries() ) { std::cerr << message << std::endl; }
         }
     }
+
+    // Helper to compile and validate SPIR-V
+    std::expected<aloe::PipelineHandle, std::string> compile_and_validate( const aloe::ComputePipelineInfo& info ) {
+        auto result = pipeline_manager_->compile_pipeline( info );
+        if ( result ) {
+            EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) )
+                << "SPIR-V validation failed for pipeline compiled from: " << info.compute_shader.name;
+        }
+        return result;
+    }
 };
 
 #define COMPUTE_ENTRY " [shader(\"compute\")] "
@@ -48,19 +58,16 @@ protected:
 // Compile a simple shader from file and verify success and valid output
 TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromFile ) {
     const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
-    const auto result = pipeline_manager_->compile_pipeline( { shader } );
-
-    ASSERT_TRUE( result.has_value() ) << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) );
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
 TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromSource ) {
     pipeline_manager_->set_virtual_file( "virtual_test.slang", COMPUTE_ENTRY "void main() { }" );
     const auto shader = aloe::ShaderCompileInfo{ .name = "virtual_test.slang", .entry_point = "main" };
-    const auto result = pipeline_manager_->compile_pipeline( { shader } );
 
-    ASSERT_TRUE( result.has_value() ) << result.error();
-    EXPECT_TRUE( spirv_tools_.Validate( pipeline_manager_->get_pipeline_spirv( *result ) ) );
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
 // Compilation should fail for an invalid shader path
@@ -68,11 +75,11 @@ TEST_F( PipelineManagerTestFixture, SimpleShaderErrorFails ) {
     // Syntactical error in compilation
     pipeline_manager_->set_virtual_file( "virtual_test.slang", COMPUTE_ENTRY "void main(" );
     const auto shader = aloe::ShaderCompileInfo{ .name = "virtual_test.slang", .entry_point = "main" };
-    const auto result = pipeline_manager_->compile_pipeline( { shader } );
+    const auto handle = compile_and_validate( { shader } );
 
-    ASSERT_FALSE( result.has_value() );
-    EXPECT_TRUE( result.error().find( "Failed to compile shader" ) != std::string::npos );
-    EXPECT_TRUE( result.error().find( "virtual_test.slang" ) != std::string::npos );
+    ASSERT_FALSE( handle.has_value() );
+    EXPECT_TRUE( handle.error().find( "Failed to compile shader" ) != std::string::npos );
+    EXPECT_TRUE( handle.error().find( "virtual_test.slang" ) != std::string::npos );
 }
 
 // Compiling a shader with defines should work
@@ -81,7 +88,7 @@ TEST_F( PipelineManagerTestFixture, CompileShaderWithDefines ) {
     pipeline_manager_->set_virtual_file( "define_shader.slang", COMPUTE_ENTRY "void main() { int x = MY_DEFINE; }" );
     pipeline_manager_->set_define( "MY_DEFINE", "1" );
 
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
@@ -90,7 +97,7 @@ TEST_F( PipelineManagerTestFixture, ShaderRecompilesWithDefine ) {
     const auto shader = aloe::ShaderCompileInfo{ .name = "define_shader.slang", .entry_point = "main" };
     pipeline_manager_->set_virtual_file( "define_shader.slang", COMPUTE_ENTRY "void main() { int x = MY_DEFINE; }" );
     pipeline_manager_->set_define( "MY_DEFINE", "1" );
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
 
     const auto initial_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( initial_version, 1 );
@@ -111,7 +118,7 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyWorks ) {
                                          "import test;" COMPUTE_ENTRY " void main() { int x = add(1, 2); }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main_shader.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
@@ -123,7 +130,7 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation )
                                          "import test;" COMPUTE_ENTRY "void main() { int x = add(1, 2); }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main_shader.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
@@ -147,7 +154,7 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
     pipeline_manager_->set_virtual_file( "main_shader.slang", COMPUTE_ENTRY "void main() { int x = 5; }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main_shader.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
@@ -170,7 +177,7 @@ TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
                                          "import mid;" COMPUTE_ENTRY "void main() { int x = square(4); }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     const uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
@@ -194,7 +201,7 @@ TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalSha
                                          "import mid;" COMPUTE_ENTRY "void main() { int x = triple(3); }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     const uint64_t initial_version = pipeline_manager_->get_pipeline_version( *handle );
@@ -228,7 +235,7 @@ TEST_F( PipelineManagerTestFixture, DiamondDependencyRecompilesOnce ) {
                                          "void main() { int x = left() + right(); }" );
 
     const aloe::ShaderCompileInfo shader{ .name = "main.slang", .entry_point = "main" };
-    const auto handle = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     const uint64_t version_before = pipeline_manager_->get_pipeline_version( *handle );
@@ -250,8 +257,8 @@ TEST_F( PipelineManagerTestFixture, MultipleEntryPointsProduceDifferentPipelines
     const aloe::ShaderCompileInfo shader1{ .name = "multi_entry.slang", .entry_point = "main1" };
     const aloe::ShaderCompileInfo shader2{ .name = "multi_entry.slang", .entry_point = "main2" };
 
-    const auto handle1 = pipeline_manager_->compile_pipeline( { .compute_shader = shader1 } );
-    const auto handle2 = pipeline_manager_->compile_pipeline( { .compute_shader = shader2 } );
+    const auto handle1 = compile_and_validate( { shader1 } );
+    const auto handle2 = compile_and_validate( { shader2 } );
 
     ASSERT_TRUE( handle1.has_value() ) << handle1.error();
     ASSERT_TRUE( handle2.has_value() ) << handle2.error();
@@ -280,8 +287,8 @@ TEST_F( PipelineManagerTestFixture, SharedIncludeRecompilesAllEntryPoints ) {
     const aloe::ShaderCompileInfo shader1{ .name = "multi_entry.slang", .entry_point = "main1" };
     const aloe::ShaderCompileInfo shader2{ .name = "multi_entry.slang", .entry_point = "main2" };
 
-    const auto handle1 = pipeline_manager_->compile_pipeline( { .compute_shader = shader1 } );
-    const auto handle2 = pipeline_manager_->compile_pipeline( { .compute_shader = shader2 } );
+    const auto handle1 = compile_and_validate( { shader1 } );
+    const auto handle2 = compile_and_validate( { shader2 } );
 
     ASSERT_TRUE( handle1.has_value() ) << handle1.error();
     ASSERT_TRUE( handle2.has_value() ) << handle2.error();
@@ -309,10 +316,10 @@ TEST_F( PipelineManagerTestFixture, CircularIncludesHandledGracefully ) {
     pipeline_manager_->set_virtual_file( "c.slang", "import a;" );// Circular: a -> b -> c -> a
 
     const aloe::ShaderCompileInfo shader{ .name = "a.slang", .entry_point = "main" };
-    const auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    const auto handle = compile_and_validate( { shader } );
 
-    ASSERT_FALSE( result.has_value() );
-    EXPECT_TRUE( result.error().find( "circular" ) != std::string::npos ||
-                 result.error().find( "cycle" ) != std::string::npos ||
-                 result.error().find( "import" ) != std::string::npos );
+    ASSERT_FALSE( handle.has_value() );
+    EXPECT_TRUE( handle.error().find( "circular" ) != std::string::npos ||
+                 handle.error().find( "cycle" ) != std::string::npos ||
+                 handle.error().find( "import" ) != std::string::npos );
 }

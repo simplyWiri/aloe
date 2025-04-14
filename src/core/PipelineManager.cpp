@@ -107,16 +107,16 @@ PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_
     filesystem_ = std::make_shared<SlangFilesystem>( root_paths_ );
 }
 
-tl::expected<PipelineHandle, std::string>
+std::expected<PipelineHandle, std::string>
 PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline ) {
     auto& state = get_pipeline_state( compute_pipeline );
 
     if ( const auto module_error = compile_module( compute_pipeline.compute_shader ) ) {
-        return tl::make_unexpected( *module_error );
+        return std::unexpected( *module_error );
     }
 
     if ( const auto spirv_error = compile_spirv( compute_pipeline.compute_shader, state.spirv ) ) {
-        return tl::make_unexpected( *spirv_error );
+        return std::unexpected( *spirv_error );
     }
 
     state.version++;

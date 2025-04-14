@@ -1,5 +1,5 @@
 # aloe
-A C++20 Vulkan Renderer
+A C++23 Vulkan Renderer
 
 # Installation
 ```bash

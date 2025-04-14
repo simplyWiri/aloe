@@ -1,8 +1,7 @@
 #pragma once
 
-#include <tl/expected.hpp>
-
 #include <memory>
+#include <vector>
 
 #define VK_ENABLE_BETA_EXTENSIONS
 #include <volk.h>
@@ -68,7 +67,7 @@ private:
 
 public:
     // Attempt to construct a new device
-    Device(DeviceSettings settings);
+    Device( DeviceSettings settings );
     ~Device();
 
     Device( Device& ) = delete;

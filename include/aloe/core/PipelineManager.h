@@ -2,7 +2,9 @@
 
 #include <aloe/core/Device.h>
 
-#include <tl/expected.hpp>
+#include <expected>
+#include <unordered_map>
+#include <vector>
 
 #include <slang-com-ptr.h>
 
@@ -84,7 +86,7 @@ public:
     ~PipelineManager() = default;
 
     // Primary method for interaction with the API
-    tl::expected<PipelineHandle, std::string> compile_pipeline( const ComputePipelineInfo& pipeline_info );
+    std::expected<PipelineHandle, std::string> compile_pipeline( const ComputePipelineInfo& pipeline_info );
 
     // Update the define(s) for all shaders being compiled
     void set_define( const std::string& name, const std::string& value );

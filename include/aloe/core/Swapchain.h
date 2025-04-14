@@ -1,9 +1,9 @@
 #pragma once
 
-#include <tl/expected.hpp>
 #include <volk.h>
 
 #include <memory>
+#include <optional>
 
 struct GLFWwindow;
 
@@ -62,7 +62,7 @@ public:
 
     // Returns true we should exit the program
     bool poll_events();
-    std::optional<RenderTarget> acquire_next_image(VkSemaphore image_available_semaphore);
+    std::optional<RenderTarget> acquire_next_image( VkSemaphore image_available_semaphore );
     VkResult present( VkQueue queue, VkSemaphore wait_semaphore );
 
     GLFWwindow* window() const { return window_; }
