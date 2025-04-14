@@ -9,8 +9,8 @@
 #include <string>
 #include <vector>
 
-template<>
-struct std::formatter<VkResult> : std::formatter<std::string> {
+template<typename T> requires (std::is_same_v<T, VkResult>)
+struct std::formatter<T> : std::formatter<std::string> {
     auto format( VkResult result, format_context& ctx ) const {
         std::ostringstream o;
         switch ( result ) {
@@ -38,6 +38,38 @@ struct std::formatter<VkResult> : std::formatter<std::string> {
         }
 
         return formatter<string>::format(std::move(o).str(), ctx);
+    }
+};
+
+template<typename T> requires (std::is_same_v<T, VkShaderStageFlags>)
+struct std::formatter<T> : std::formatter<std::string> {
+    auto format(VkShaderStageFlags flags, format_context& ctx) const {
+        std::ostringstream out;
+
+        if (flags & VK_SHADER_STAGE_VERTEX_BIT)           out << "VERTEX | ";
+        if (flags & VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT) out << "TESSELLATION_CONTROL | ";
+        if (flags & VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) out << "TESSELLATION_EVALUATION | ";
+        if (flags & VK_SHADER_STAGE_GEOMETRY_BIT)         out << "GEOMETRY | ";
+        if (flags & VK_SHADER_STAGE_FRAGMENT_BIT)         out << "FRAGMENT | ";
+        if (flags & VK_SHADER_STAGE_COMPUTE_BIT)          out << "COMPUTE | ";
+        if (flags & VK_SHADER_STAGE_ALL_GRAPHICS)         out << "ALL_GRAPHICS | ";
+        if (flags & VK_SHADER_STAGE_ALL)                  out << "ALL | ";
+        if (flags & VK_SHADER_STAGE_RAYGEN_BIT_KHR)       out << "RAYGEN_KHR | ";
+        if (flags & VK_SHADER_STAGE_ANY_HIT_BIT_KHR)      out << "ANY_HIT_KHR | ";
+        if (flags & VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR)  out << "CLOSEST_HIT_KHR | ";
+        if (flags & VK_SHADER_STAGE_MISS_BIT_KHR)         out << "MISS_KHR | ";
+        if (flags & VK_SHADER_STAGE_INTERSECTION_BIT_KHR) out << "INTERSECTION_KHR | ";
+        if (flags & VK_SHADER_STAGE_CALLABLE_BIT_KHR)     out << "CALLABLE_KHR | ";
+        if (flags & VK_SHADER_STAGE_TASK_BIT_EXT)         out << "TASK_EXT | ";
+        if (flags & VK_SHADER_STAGE_MESH_BIT_EXT)         out << "MESH_EXT | ";
+
+        auto str = std::move(out).str();
+        if (!str.empty())
+            str.erase(str.size() - 3); // remove trailing " | "
+        else
+            str = "NONE";
+
+        return std::formatter<std::string>::format(str, ctx);
     }
 };
 

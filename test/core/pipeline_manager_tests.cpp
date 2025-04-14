@@ -1,4 +1,5 @@
 #include <aloe/core/PipelineManager.h>
+#include <aloe/core/ResourceManager.h>
 #include <aloe/util/log.h>
 
 #include <GLFW/glfw3.h>
@@ -20,8 +21,7 @@ protected:
         aloe::set_logger( mock_logger_ );
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
-        device_ =
-            std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = false, .headless = true } );
+        device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
         pipeline_manager_ =
             std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
 
@@ -33,6 +33,9 @@ protected:
     }
 
     void TearDown() override {
+        pipeline_manager_.reset();
+        device_.reset( nullptr );
+
         auto& debug_info = aloe::Device::debug_info();
         EXPECT_EQ( debug_info.num_warning, 0 );
         EXPECT_EQ( debug_info.num_error, 0 );
@@ -43,7 +46,7 @@ protected:
     }
 };
 
-#define COMPUTE_ENTRY " [shader(\"compute\")] "
+#define COMPUTE_ENTRY "import aloe; [shader(\"compute\")] "
 
 // Compile a simple shader from file and verify success and valid output
 TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromFile ) {
@@ -316,3 +319,200 @@ TEST_F( PipelineManagerTestFixture, CircularIncludesHandledGracefully ) {
                  result.error().find( "cycle" ) != std::string::npos ||
                  result.error().find( "import" ) != std::string::npos );
 }
+
+TEST_F( PipelineManagerTestFixture, CreatesPipelineLayoutFromReflection ) {
+    pipeline_manager_->set_virtual_file( "test.slang", R"(
+import aloe;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void compute_main(uint3 id : SV_DispatchThreadID,
+                  uniform aloe::BufferHandle buffer,
+                  uniform float time) {
+    buffer.get<float>()[id.x] = time;
+}
+)" );
+
+    const aloe::ShaderCompileInfo shader{ .name = "test.slang", .entry_point = "compute_main" };
+    const auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    EXPECT_TRUE( result );
+
+    auto pc_buffer = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *result, VK_SHADER_STAGE_COMPUTE_BIT, "buffer" );
+    auto pc_time = pipeline_manager_->get_uniform_handle<float>( *result, VK_SHADER_STAGE_COMPUTE_BIT, "time" );
+
+    pc_buffer.set_value( {5} );
+    pc_time.set_value( 123.456f );
+
+    // auto uniform_block = pipeline_manager_->get_uniform_block( *result, VK_SHADER_STAGE_COMPUTE_BIT );
+    aloe::UniformBlock uniform_block(12);
+    uniform_block.set( pc_buffer );
+    uniform_block.set( pc_time );
+
+    const auto* data = static_cast<const uint8_t*>(uniform_block.data());
+    EXPECT_EQ( *reinterpret_cast<const aloe::BufferHandle*>(data + pc_buffer.offset), aloe::BufferHandle{5} );
+    EXPECT_EQ( *reinterpret_cast<const float*>(data + pc_time.offset), 123.456f );
+}
+
+TEST_F( PipelineManagerTestFixture, Something) {
+    pipeline_manager_->set_virtual_file( "test.slang", R"(
+import aloe;
+
+[[vk::push_constant]]
+struct VertexPushConstants {
+    [[vk::offset(0)]] float4x4 modelMatrix;
+};
+
+[shader("vertex")]
+void vertex_main(
+    [[vk::location(0)]] float3 inPosition : POSITION,
+    uniform VertexPushConstants pc,
+    out float4 outPosition : SV_Position)
+{
+    outPosition = mul(pc.modelMatrix, float4(inPosition, 1.0));
+};
+
+// Fragment Shader
+[[vk::push_constant]]
+struct FragmentPushConstants {
+    [[vk::offset(64)]] float4 color;
+};
+
+[shader("fragment")]
+void fragment_main(
+    in float4 inPosition : SV_Position,
+    uniform FragmentPushConstants pc,
+    out float4 outColor : SV_Target)
+{
+    outColor = pc.color;
+};
+)" );
+
+    const aloe::ShaderCompileInfo shader{ .name = "test.slang", .entry_point = "compute_main" };
+    const auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+    EXPECT_TRUE( result );
+}
+
+// TEST_F( PipelineManagerTestFixture, CopiesBufferWithBindlessHandle ) {
+//     pipeline_manager_->set_virtual_file( "copy_buffer.slang", R"(
+// import aloe;
+//
+// [shader("compute")]
+// [numthreads(64, 1, 1)]
+// void compute_main(uint3 id : SV_DispatchThreadID,
+//                   uniform aloe::BufferHandle src,
+//                   uniform aloe::BufferHandle dst) {
+//     dst.get<float>()[id.x] = src.get<float>()[id.x];
+// }
+// )" );
+//
+//     const size_t num_elements = 64;
+//     std::vector src_data( num_elements, 42.0f );
+//     std::vector dst_data( num_elements, 0.0f );
+//
+//     auto src_buf = device_->resource_manager().create_host_buffer( src_data );
+//     auto dst_buf = device_->resource_manager().create_host_buffer( dst_data );
+//
+//     aloe::ShaderCompileInfo shader{ .name = "copy_buffer.slang", .entry_point = "compute_main" };
+//
+//     auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//     ASSERT_TRUE( result );
+//
+//     pipeline_manager_->bind_global_buffer( src_buf.handle(), 0 );
+//     pipeline_manager_->bind_global_buffer( dst_buf.handle(), 1 );
+//     pipeline_manager_->dispatch( shader, num_elements );
+//
+//     auto readback = dst_buf.readback<float>();
+//     EXPECT_EQ( readback, src_data );
+// }
+//
+// TEST_F( PipelineManagerTestFixture, FailsGracefullyOnOutOfBoundsHandle ) {
+//     pipeline_manager_->set_virtual_file( "out_of_bounds.slang", R"(
+// import aloe;
+//
+// [shader("compute")]
+// [numthreads(1, 1, 1)]
+// void compute_main(uint3 id : SV_DispatchThreadID,
+//                   uniform aloe::BufferHandle bogus) {
+//     bogus.get<int>()[0] = 1337;  // Index is intentionally out-of-bounds
+// }
+// )" );
+//
+//     aloe::ShaderCompileInfo shader{ .name = "out_of_bounds.slang", .entry_point = "compute_main" };
+//
+//     auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//     ASSERT_TRUE( result );
+//
+//     aloe::BufferHandle invalid_handle{ .id = 9999 };               // Clearly invalid
+//     pipeline_manager_->bind_global_buffer( {}, invalid_handle.id );// No actual buffer
+//
+//     // Expect a validation error from Vulkan layer or graceful fallback in logs
+//     pipeline_manager_->dispatch( shader, 1 );
+//     EXPECT_GE( aloe::Device::debug_info().num_error, 1 );
+// }
+//
+// TEST_F( PipelineManagerTestFixture, ReportsShaderErrorWhenBindingMissing ) {
+//     pipeline_manager_->set_virtual_file( "missing_binding.slang", R"(
+// [shader("compute")]
+// [numthreads(1, 1, 1)]
+// void compute_main(uint3 id : SV_DispatchThreadID) {
+//     // Does not import aloe; will miss g_buffers
+// }
+// )" );
+//
+//     aloe::ShaderCompileInfo shader{ .name = "missing_binding.slang", .entry_point = "compute_main" };
+//
+//     auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//     EXPECT_FALSE( result );// Should fail due to missing aloe import / g_buffers
+// }
+//
+// TEST_F( PipelineManagerTestFixture, PushConstantAccessSucceedsWhenInRange ) {
+//     pipeline_manager_->set_virtual_file( "push_constant_ok.slang", R"(
+// import aloe;
+//
+// [shader("compute")]
+// [numthreads(1, 1, 1)]
+// void compute_main(uint3 id : SV_DispatchThreadID,
+//                   uniform aloe::BufferHandle buffer,
+//                   uniform float value) {
+//     buffer.get<float>()[0] = value;
+// }
+// )" );
+//
+//     aloe::ShaderCompileInfo shader{ .name = "push_constant_ok.slang", .entry_point = "compute_main" };
+//
+//     auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//     ASSERT_TRUE( result );
+//
+//     auto buffer = device_->resource_manager().create_host_buffer<float>( { 0.0f } );
+//     pipeline_manager_->bind_global_buffer( buffer.handle(), 0 );
+//     pipeline_manager_->dispatch( shader, 1, 1, 1, 123.456f );
+//
+//     auto out = buffer.readback<float>();
+//     EXPECT_FLOAT_EQ( out[0], 123.456f );
+// }
+//
+// TEST_F( PipelineManagerTestFixture, HandlesDescriptorOverflowAtRuntime ) {
+//     pipeline_manager_->set_virtual_file( "noop.slang", R"(
+// import aloe;
+//
+// [shader("compute")]
+// [numthreads(1, 1, 1)]
+// void compute_main(uint3 id : SV_DispatchThreadID) {}
+// )" );
+//
+//     aloe::ShaderCompileInfo shader{ .name = "noop.slang", .entry_point = "compute_main" };
+//
+//     auto result = pipeline_manager_->compile_pipeline( { .compute_shader = shader } );
+//     ASSERT_TRUE( result );
+//
+//     // Exceed descriptor limit (arbitrarily use 2048 handles)
+//     for ( int i = 0; i < 2048; ++i ) {
+//         auto buf = device_->resource_manager().create_host_buffer<float>( { float( i ) } );
+//         pipeline_manager_->bind_global_buffer( buf.handle(), i );
+//     }
+//
+//     pipeline_manager_->dispatch( shader, 1 );
+//
+//     // Expect at least a warning or a Vulkan validation error
+//     EXPECT_GE( aloe::Device::debug_info().num_warning + aloe::Device::debug_info().num_error, 1 );
+// }
