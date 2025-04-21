@@ -43,6 +43,32 @@ protected:
     }
 };
 
+TEST_F( ResourceManagerTestFixture, TestResourceIdPacking ) {
+    {
+        const auto res = aloe::ResourceId( 123, 456, 789 );
+        EXPECT_EQ( res.slot(), 123 );
+        EXPECT_EQ( res.version(), 456 );
+        EXPECT_EQ( res.id(), 789 );
+
+        EXPECT_EQ( res.raw(), 123ull + (456ull << 24) + (789ull << 40) );
+    }
+
+    {
+        constexpr auto slot = ( 1 << aloe::ResourceId::SLOT_BITS ) - 1;
+        constexpr auto version = ( 1 << aloe::ResourceId::VERSION_BITS ) - 1;
+        constexpr auto id = ( 1 << aloe::ResourceId::RESOURCE_ID_BITS ) - 1;
+
+        const auto res = aloe::ResourceId( slot, version, id );
+
+        EXPECT_EQ( res.slot(), slot );
+        EXPECT_EQ( res.version(), version );
+        EXPECT_EQ( res.id(), id );
+
+        // bit repr should be entirely 1's
+        EXPECT_EQ( res.raw(), ~0ull );
+    }
+}
+
 TEST_F( ResourceManagerTestFixture, CreateBuffer ) {
     const auto handle = resource_manager_->create_buffer( {
         .size = 1024,
@@ -50,7 +76,7 @@ TEST_F( ResourceManagerTestFixture, CreateBuffer ) {
         .name = "TestBuffer",
     } );
 
-    ASSERT_NE( handle.id, 0 );
+    ASSERT_NE( handle.id(), 0 );
     EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 }
 
@@ -121,7 +147,7 @@ TEST_F( ResourceManagerTestFixture, FreeBuffer ) {
         .name = "TestBuffer",
     } );
 
-    EXPECT_NE( handle.id, 0 );
+    ASSERT_NE( handle.id(), 0 );
     EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 
     resource_manager_->free_buffer( handle );
@@ -136,7 +162,7 @@ TEST_F( ResourceManagerTestFixture, CreateImage ) {
         .name = "TestImage",
     } );
 
-    EXPECT_NE( handle.id, 0 );
+    ASSERT_NE( handle.id(), 0 );
     EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
 }
 
@@ -167,7 +193,7 @@ TEST_F( ResourceManagerTestFixture, FreeImage ) {
         .name = "TestImage",
     } );
 
-    EXPECT_NE( handle.id, 0 );
+    ASSERT_NE( handle.id(), 0 );
     EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
 
     resource_manager_->free_image( handle );
@@ -195,7 +221,7 @@ TEST_F( ResourceManagerTestFixture, StressTest ) {
             .name = "StressBuffer",
         } );
 
-        EXPECT_NE( handle.id, 0 );
+        ASSERT_NE( handle.id(), 0 );
         buffer_handles.push_back( handle );
 
         // Upload and read-back to validate integrity
@@ -212,7 +238,7 @@ TEST_F( ResourceManagerTestFixture, StressTest ) {
             .name = "StressImage",
         } );
 
-        EXPECT_NE( image_handle.id, 0 );
+        ASSERT_NE( handle.id(), 0 );
         image_handles.push_back( image_handle );
     }
 

@@ -35,7 +35,7 @@ BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
     buffer.desc = desc;
     const auto result =
         vmaCreateBuffer( allocator_, &buffer_info, &alloc_info, &buffer.resource, &buffer.allocation, nullptr );
-    if ( result != VK_SUCCESS ) { return { 0 }; }
+    if ( result != VK_SUCCESS ) { return {}; }
 
     if ( device_.validation_enabled() && desc.name ) {
         VkDebugUtilsObjectNameInfoEXT debug_name_info{
@@ -47,7 +47,7 @@ BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
         vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
     }
 
-    return buffers_.emplace( ++current_buffer_id_, buffer ).first->first;
+    return buffers_.emplace( BufferHandle( current_buffer_id_++, 1, 1 ), buffer ).first->first;
 }
 
 ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
@@ -73,7 +73,7 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
     image.desc = desc;
     const auto result =
         vmaCreateImage( allocator_, &image_info, &alloc_info, &image.resource, &image.allocation, nullptr );
-    if ( result != VK_SUCCESS ) { return { 0 }; }
+    if ( result != VK_SUCCESS ) { return {}; }
 
     if ( device_.validation_enabled() && desc.name ) {
         VkDebugUtilsObjectNameInfoEXT debug_name_info{
@@ -85,13 +85,13 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
         vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
     }
 
-    return images_.emplace( ++current_image_id_, image ).first->first;
+    return images_.emplace( ImageHandle( current_image_id_++, 1, 1 ), image ).first->first;
 }
 
 VkDeviceSize ResourceManager::upload_to_buffer( BufferHandle handle, const void* data, VkDeviceSize size ) {
     const auto iter = buffers_.find( handle );
     if ( iter == buffers_.end() ) {
-        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id );
+        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id() );
 
         return 0;
     }
@@ -119,7 +119,7 @@ VkDeviceSize ResourceManager::upload_to_buffer( BufferHandle handle, const void*
 VkDeviceSize ResourceManager::read_from_buffer( BufferHandle handle, void* out_data, VkDeviceSize bytes_to_read ) {
     const auto iter = buffers_.find( handle );
     if ( iter == buffers_.end() ) {
-        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id );
+        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id() );
         return 0;
     }
 

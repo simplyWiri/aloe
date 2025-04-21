@@ -171,7 +171,6 @@ public:
 
     // todo: temporary APIs before we lift this into a higher level (CommandList) type API.
     UniformBlock& get_uniform_block( PipelineHandle h );
-
     template<typename T>
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, VkShaderStageFlags stage, std::string_view name ) const {
         for ( const auto& shader : pipelines_.at( h.id ).compiled_shaders ) {

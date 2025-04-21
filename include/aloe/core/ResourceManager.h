@@ -1,5 +1,7 @@
 #pragma once
 
+#include <aloe/core/Resources.h>
+
 #include <vma/vma.h>
 #include <volk.h>
 
@@ -9,34 +11,6 @@
 
 namespace aloe {
 class Device;
-
-struct BufferHandle {
-    uint64_t id = 0;
-
-    uint64_t operator()() const { return id; }
-    auto operator<=>( const BufferHandle& other ) const = default;
-};
-
-struct ImageHandle {
-    uint64_t id = 0;
-
-    uint64_t operator()() const { return id; }
-    auto operator<=>( const ImageHandle& other ) const = default;
-};
-
-}// namespace aloe
-
-template<>
-struct std::hash<aloe::BufferHandle> {
-    size_t operator()( const aloe::BufferHandle& handle ) const noexcept { return std::hash<uint64_t>{}( handle.id ); }
-};
-
-template<>
-struct std::hash<aloe::ImageHandle> {
-    size_t operator()( const aloe::ImageHandle& handle ) const noexcept { return std::hash<uint64_t>{}( handle.id ); }
-};
-
-namespace aloe {
 
 struct BufferDesc {
     VkDeviceSize size = 0;
