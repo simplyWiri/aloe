@@ -1,3 +1,5 @@
+import aloe;
+
 module test;
 
 public int add_test(int a, int b) { return b + a; }

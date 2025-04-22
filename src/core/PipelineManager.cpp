@@ -1,4 +1,6 @@
+#include <aloe/core/aloe.slang.h>
 #include <aloe/core/PipelineManager.h>
+#include <aloe/core/ResourceManager.h>
 #include <aloe/util/algorithms.h>
 #include <aloe/util/log.h>
 #include <aloe/util/vulkan_util.h>
@@ -13,7 +15,9 @@
 namespace aloe {
 
 struct SlangFilesystem : ISlangFileSystem {
-    explicit SlangFilesystem( std::vector<std::string> root_paths ) : root_paths_( std::move( root_paths ) ) {}
+    explicit SlangFilesystem( std::vector<std::string> root_paths ) : root_paths_( std::move( root_paths ) ) {
+        files_["aloe.slang"] = get_aloe_module();
+    }
     virtual ~SlangFilesystem() = default;
 
     // Add a file to the in-memory storage
@@ -116,10 +120,23 @@ PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_
     }
 
     filesystem_ = std::make_shared<SlangFilesystem>( root_paths_ );
+    create_global_descriptor_layout();
 }
 
 PipelineManager::~PipelineManager() {
     for ( auto& pipeline : pipelines_ ) { pipeline.free_state( device_ ); }
+
+    if ( global_descriptor_set_ != VK_NULL_HANDLE ) {
+        vkFreeDescriptorSets( device_.device(), global_descriptor_pool_, 1, &global_descriptor_set_ );
+    }
+
+    if ( global_descriptor_set_layout != VK_NULL_HANDLE ) {
+        vkDestroyDescriptorSetLayout( device_.device(), global_descriptor_set_layout, nullptr );
+    }
+
+    if ( global_descriptor_pool_ != VK_NULL_HANDLE ) {
+        vkDestroyDescriptorPool( device_.device(), global_descriptor_pool_, nullptr );
+    }
 }
 
 std::expected<PipelineHandle, std::string>
@@ -377,6 +394,83 @@ void PipelineManager::reflect_module( const ShaderCompileInfo& info, CompiledSha
     }
 
     assert( std::ranges::is_sorted( state.uniforms ) );
+}
+
+void PipelineManager::create_global_descriptor_layout() {
+    const auto limits = device_.get_physical_device_limits();
+
+    // Make the descriptor pool.
+    {
+
+        std::vector<VkDescriptorPoolSize> pools;
+        // Eventually we will extend this to support images etc.
+        pools.emplace_back( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, limits.maxDescriptorSetStorageBuffers );
+
+        VkDescriptorPoolCreateInfo descriptor_pool_create_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags =
+                VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT | VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+            .maxSets = 1,
+            .poolSizeCount = static_cast<uint32_t>( pools.size() ),
+            .pPoolSizes = pools.data(),
+        };
+
+        const auto result =
+            vkCreateDescriptorPool( device_.device(), &descriptor_pool_create_info, nullptr, &global_descriptor_pool_ );
+        if ( result != VK_SUCCESS ) { throw std::runtime_error{ "failed to create descriptor pool" }; }
+    }
+
+    // Make the descriptor set layout
+    {
+        std::vector<VkDescriptorSetLayoutBinding> layout_bindings;
+        std::vector<VkDescriptorBindingFlags> binding_flags;
+
+        layout_bindings.emplace_back( get_binding_slot(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                      limits.maxDescriptorSetStorageBuffers,
+                                      VK_SHADER_STAGE_ALL,
+                                      nullptr );
+
+
+        binding_flags.resize( layout_bindings.size() );
+        std::ranges::fill( binding_flags,
+                           VkDescriptorBindingFlags{ VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                                                     VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT } );
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfo layout_binding_flags_create_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+            .bindingCount = static_cast<uint32_t>( binding_flags.size() ),
+            .pBindingFlags = binding_flags.data(),
+        };
+
+        VkDescriptorSetLayoutCreateInfo set_layout_create_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = &layout_binding_flags_create_info,
+            .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+            .bindingCount = static_cast<uint32_t>( layout_bindings.size() ),
+            .pBindings = layout_bindings.data(),
+        };
+
+        const auto result = vkCreateDescriptorSetLayout( device_.device(),
+                                                         &set_layout_create_info,
+                                                         nullptr,
+                                                         &global_descriptor_set_layout );
+        if ( result != VK_SUCCESS ) { throw std::runtime_error{ "failed to create descriptor set layout" }; }
+    }
+
+    // Make the descriptor set
+    {
+        VkDescriptorSetAllocateInfo descriptor_set_allocate_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = global_descriptor_pool_,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &global_descriptor_set_layout,
+        };
+
+        const auto result =
+            vkAllocateDescriptorSets( device_.device(), &descriptor_set_allocate_info, &this->global_descriptor_set_ );
+        if ( result != VK_SUCCESS ) { throw std::runtime_error{ "failed to allocate descriptor set" }; }
+    }
 }
 
 std::expected<PipelineManager::CompiledShaderState, std::string>

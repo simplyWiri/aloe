@@ -1,6 +1,7 @@
 #pragma once
 
 #include <aloe/core/Device.h>
+#include <aloe/core/Resources.h>
 
 #include <algorithm>
 #include <expected>
@@ -17,6 +18,8 @@ struct PreprocessorMacroDesc;
 }// namespace slang
 
 namespace aloe {
+
+class ResourceManager;
 
 struct ShaderCompileInfo {
     std::string name;
@@ -153,6 +156,10 @@ class PipelineManager {
     std::vector<PipelineState> pipelines_{};
     std::vector<std::unique_ptr<ShaderState>> shaders_{};
 
+    VkDescriptorPool global_descriptor_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout global_descriptor_set_layout = VK_NULL_HANDLE;
+    VkDescriptorSet global_descriptor_set_ = VK_NULL_HANDLE;
+
 public:
     PipelineManager( Device& device, std::vector<std::string> root_paths );
     ~PipelineManager();
@@ -201,6 +208,7 @@ private:
     void recompile_dependents( const std::vector<std::string>& shader_paths );
     void reflect_module( const ShaderCompileInfo& info, CompiledShaderState& state );
 
+    void create_global_descriptor_layout();
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
 };
