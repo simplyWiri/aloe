@@ -99,6 +99,9 @@ const std::vector<PipelineManager::ShaderState*>& PipelineManager::ShaderState::
 }
 
 void PipelineManager::PipelineState::free_state( Device& device ) {
+    if ( pipeline != VK_NULL_HANDLE ) { vkDestroyPipeline( device.device(), pipeline, nullptr ); }
+    if ( layout != VK_NULL_HANDLE ) { vkDestroyPipelineLayout( device.device(), layout, nullptr ); }
+
     for ( auto& shader : compiled_shaders ) {
         if ( shader.shader_module != VK_NULL_HANDLE ) {
             vkDestroyShaderModule( device.device(), shader.shader_module, nullptr );
@@ -154,6 +157,27 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
     if ( !uniform_block ) { return std::unexpected( uniform_block.error() ); }
     state.uniforms = std::move( *uniform_block );
 
+    const auto pipeline_layout = get_pipeline_layout( { *compiled_shader } );
+    if ( !pipeline_layout ) { return std::unexpected( pipeline_layout.error() ); }
+    state.layout = *pipeline_layout;
+
+    VkComputePipelineCreateInfo create_info{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = compiled_shader->shader_module,
+            .pName = compute_pipeline.compute_shader.entry_point.c_str(),
+        },
+        .layout = *pipeline_layout,
+    };
+
+    const auto result =
+        vkCreateComputePipelines( device_.device(), VK_NULL_HANDLE, 1, &create_info, nullptr, &state.pipeline );
+    if ( result != VK_SUCCESS ) {
+        return std::unexpected( std::format( "Failed to make compute pipeline, error: {}", result ) );
+    }
+
     state.version++;
     return PipelineHandle{ state.id };
 }
@@ -201,6 +225,10 @@ Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
         target_desc.profile = global_session_->findProfile( "spirv_1_5" );
         target_desc.flags = SLANG_TARGET_FLAG_GENERATE_SPIRV_DIRECTLY;
 
+        std::vector<slang::CompilerOptionEntry> options;
+        options.emplace_back( slang::CompilerOptionEntry{ .name = slang::CompilerOptionName::VulkanUseEntryPointName,
+                                                          .value = { slang::CompilerOptionValueKind::Int, 1 } } );
+
         auto session_desc = slang::SessionDesc{};
         session_desc.targets = &target_desc;
         session_desc.targetCount = 1;
@@ -210,6 +238,8 @@ Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
         session_desc.preprocessorMacroCount = static_cast<SlangInt>( defines.size() );
         session_desc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
         session_desc.fileSystem = filesystem_.get();
+        session_desc.compilerOptionEntries = options.data();
+        session_desc.compilerOptionEntryCount = options.size();
 
         if ( SLANG_FAILED( global_session_->createSession( session_desc, session_.writeRef() ) ) ) {
             log_write( LogLevel::Error, "Failed to create Slang session." );
@@ -574,6 +604,43 @@ PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shad
     }
 
     return UniformBlock( stage_bindings, global_max_offset );
+}
+
+std::expected<VkPipelineLayout, std::string>
+PipelineManager::get_pipeline_layout( const std::vector<CompiledShaderState>& shaders ) {
+    // Collect all push constant ranges from reflected uniforms
+    std::vector<VkPushConstantRange> push_constants;
+    for ( const auto& shader : shaders ) {
+        // If we have any uniforms, we need to spec out a push constant
+        if ( !shader.uniforms.empty() ) {
+            assert( std::ranges::is_sorted( shader.uniforms ) );
+            const auto last_pc = shader.uniforms.back();
+
+            const auto stage = shader.stage;
+            const auto end_offset = last_pc.offset + last_pc.size;
+
+            // We can't register multiple push constants in Vulkan for the same stage, even if they are non-overlapping,
+            // i.e. (range { offset: 0, size: 8 }, range { offset: 8, size: 4 } ) is an invaid construct, so we need to
+            // merge each of the uniforms into a block of "contiguous" memory, as a singular push constant.
+            push_constants.emplace_back( stage, 0, end_offset );
+        }
+    }
+
+    VkPipelineLayoutCreateInfo pipeline_layout{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &global_descriptor_set_layout,
+        .pushConstantRangeCount = static_cast<uint32_t>( push_constants.size() ),
+        .pPushConstantRanges = push_constants.data(),
+    };
+
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    const auto result = vkCreatePipelineLayout( device_.device(), &pipeline_layout, nullptr, &layout );
+    if ( result != VK_SUCCESS ) {
+        return std::unexpected( std::format( "Failed to create pipeline layout, error: {}", result ) );
+    }
+
+    return layout;
 }
 
 }// namespace aloe

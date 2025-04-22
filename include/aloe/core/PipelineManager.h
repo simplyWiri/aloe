@@ -137,6 +137,8 @@ class PipelineManager {
 
         std::vector<CompiledShaderState> compiled_shaders = {};
         std::optional<UniformBlock> uniforms = std::nullopt;
+        VkPipelineLayout layout = VK_NULL_HANDLE;
+        VkPipeline pipeline = VK_NULL_HANDLE;
 
         void free_state( Device& device );
         bool matches_shader( const ShaderState& shader ) const;
@@ -211,6 +213,7 @@ private:
     void create_global_descriptor_layout();
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
+    std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
 };
 
 }// namespace aloe
