@@ -122,6 +122,51 @@ TEST_F( ResourceManagerTestFixture, UploadToFreedBuffer ) {
 
     resource_manager_->free_buffer( buffer );
     EXPECT_EQ( resource_manager_->upload_to_buffer( buffer, data.data(), data.size() ), 0 );
+
+    // Verify that an error was logged
+    const auto& entries = mock_logger_->get_entries();
+    EXPECT_FALSE( entries.empty() );
+
+    // Check that at least one entry contains error about invalid buffer handle
+    bool found_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "Invalid buffer handle" ) != std::string::npos ) {
+            found_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_error );
+}
+
+TEST_F( ResourceManagerTestFixture, ReadFromFreedBuffer ) {
+    constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    std::array<int, 8> read_back_data;
+
+    const auto buffer = resource_manager_->create_buffer( {
+        .size = data.size() * sizeof( int ),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "TestBuffer",
+    } );
+
+    resource_manager_->upload_to_buffer( buffer, data.data(), data.size() * sizeof( int ) );
+
+    resource_manager_->free_buffer( buffer );
+    EXPECT_EQ( resource_manager_->read_from_buffer( buffer, read_back_data.data(), data.size() * sizeof( int ) ), 0 );
+
+    // Verify that an error was logged
+    const auto& entries = mock_logger_->get_entries();
+    EXPECT_FALSE( entries.empty() );
+
+    // Check that at least one entry contains error about invalid buffer handle
+    bool found_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "Invalid buffer handle" ) != std::string::npos ) {
+            found_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_error );
 }
 
 TEST_F( ResourceManagerTestFixture, UploadToHostOnlyBuffer ) {
@@ -149,6 +194,36 @@ TEST_F( ResourceManagerTestFixture, FreeBuffer ) {
 
     resource_manager_->free_buffer( handle );
     EXPECT_EQ( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+}
+
+TEST_F( ResourceManagerTestFixture, GetBufferValidation ) {
+    // First create a buffer
+    const auto handle = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer",
+    } );
+
+    ASSERT_NE( handle.id(), 0 );
+    EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+
+    // Free the buffer then try to access it
+    resource_manager_->free_buffer( handle );
+    EXPECT_EQ( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+
+    // Verify that an error was logged
+    const auto& entries = mock_logger_->get_entries();
+    EXPECT_FALSE( entries.empty() );
+
+    // Check that at least one entry contains error about invalid buffer handle
+    bool found_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "Invalid buffer handle" ) != std::string::npos ) {
+            found_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_error );
 }
 
 TEST_F( ResourceManagerTestFixture, CreateImage ) {

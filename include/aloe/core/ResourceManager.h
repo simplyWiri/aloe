@@ -48,8 +48,9 @@ class ResourceManager {
     uint64_t current_image_slot_ = 0;
     uint64_t current_resource_id_ = 1;
 
-    std::unordered_map<BufferHandle, AllocatedResource<VkBuffer, BufferDesc>> buffers_;
-    std::unordered_map<ImageHandle, AllocatedResource<VkImage, ImageDesc>> images_;
+    std::unordered_map<BufferHandle, AllocatedResource<VkBuffer, BufferDesc>, ResourceId::Hash, ResourceId::Equal>
+        buffers_;
+    std::unordered_map<ImageHandle, AllocatedResource<VkImage, ImageDesc>, ResourceId::Hash, ResourceId::Equal> images_;
 
 public:
     ~ResourceManager();
@@ -75,6 +76,9 @@ public:
 
 private:
     explicit ResourceManager( Device& device );
+
+    // Helper to find and validate buffer before accessing it
+    const AllocatedResource<VkBuffer, BufferDesc>* find_buffer( BufferHandle handle );
 };
 
 }// namespace aloe

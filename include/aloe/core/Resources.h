@@ -29,6 +29,14 @@ struct ResourceId {
 
     auto operator<=>( const ResourceId& other ) const = default;
 
+    struct Hash {
+        size_t operator()( const ResourceId& id ) const { return std::hash<uint64_t>{}( id.id() ); }
+    };
+
+    struct Equal {
+        bool operator()( const ResourceId& lhs, const ResourceId& rhs ) const { return lhs.id() == rhs.id(); }
+    };
+
 private:
     uint64_t raw_;
 };

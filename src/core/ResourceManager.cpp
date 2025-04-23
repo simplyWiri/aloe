@@ -89,66 +89,66 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
 }
 
 VkDeviceSize ResourceManager::upload_to_buffer( BufferHandle handle, const void* data, VkDeviceSize size ) {
-    const auto iter = buffers_.find( handle );
-    if ( iter == buffers_.end() ) {
-        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id() );
+    if ( const auto* resource = find_buffer( handle ) ) {
+        if ( ( resource->desc.memory_flags &
+               ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
+            log_write( LogLevel::Error,
+                       "Trying to write to {}, which was not created with "
+                       "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
+                       "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
+                       resource->desc.name );
 
-        return 0;
+            return 0;
+        }
+        void* dst_pointer = nullptr;
+        vmaMapMemory( allocator_, resource->allocation, &dst_pointer );
+        std::memcpy( dst_pointer, data, size );
+        vmaUnmapMemory( allocator_, resource->allocation );
+
+        return size;
     }
-
-    const auto& resource = iter->second;
-    if ( ( resource.desc.memory_flags &
-           ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
-        log_write( LogLevel::Error,
-                   "Trying to write to {}, which was not created with "
-                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
-                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
-                   resource.desc.name );
-
-        return 0;
-    }
-    void* dst_pointer = nullptr;
-    vmaMapMemory( allocator_, resource.allocation, &dst_pointer );
-    std::memcpy( dst_pointer, data, size );
-    vmaUnmapMemory( allocator_, resource.allocation );
-
-    return size;
+    return 0;
 }
 
 VkDeviceSize ResourceManager::read_from_buffer( BufferHandle handle, void* out_data, VkDeviceSize bytes_to_read ) {
+    if ( const auto* resource = find_buffer( handle ) ) {
+        if ( ( resource->desc.memory_flags &
+               ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
+            log_write( LogLevel::Error,
+                       "Trying to write to {}, which was not created with "
+                       "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
+                       "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
+                       resource->desc.name );
+
+            return 0;
+        }
+
+        const auto read_bytes = std::min( resource->desc.size, bytes_to_read );
+
+        void* dst_pointer = nullptr;
+        vmaMapMemory( allocator_, resource->allocation, &dst_pointer );
+        std::memcpy( out_data, dst_pointer, read_bytes );
+        vmaUnmapMemory( allocator_, resource->allocation );
+
+        return read_bytes;
+    }
+    return 0;
+}
+
+const ResourceManager::AllocatedResource<VkBuffer, BufferDesc>* ResourceManager::find_buffer( BufferHandle handle ) {
     const auto iter = buffers_.find( handle );
     if ( iter == buffers_.end() ) {
-        log_write( LogLevel::Error, "Could not find buffer handle {}", handle.id() );
-        return 0;
+        log_write( LogLevel::Error, "Invalid buffer handle {:#x} (resource_id: {})", handle.raw(), handle.id() );
+        return nullptr;
     }
-
-    const auto& resource = iter->second;
-    if ( ( resource.desc.memory_flags &
-           ( VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT ) ) == 0 ) {
-        log_write( LogLevel::Error,
-                   "Trying to write to {}, which was not created with "
-                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT` or "
-                   "`VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT`",
-                   resource.desc.name );
-
-        return 0;
-    }
-
-    const auto read_bytes = std::min( resource.desc.size, bytes_to_read );
-
-    void* dst_pointer = nullptr;
-    vmaMapMemory( allocator_, resource.allocation, &dst_pointer );
-    std::memcpy( out_data, dst_pointer, read_bytes );
-    vmaUnmapMemory( allocator_, resource.allocation );
-
-    return read_bytes;
+    return &iter->second;
 }
 
 VkBuffer ResourceManager::get_buffer( BufferHandle handle ) {
-    const auto iter = buffers_.find( handle );
-    return iter == buffers_.end() ? VK_NULL_HANDLE : iter->second.resource;
+    const auto* resource = find_buffer( handle );
+    return resource ? resource->resource : VK_NULL_HANDLE;
 }
 
 VkImage ResourceManager::get_image( ImageHandle handle ) {
