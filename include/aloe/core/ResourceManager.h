@@ -44,8 +44,9 @@ class ResourceManager {
     Device& device_;
     VmaAllocator allocator_;
 
-    uint64_t current_buffer_id_ = 0;
-    uint64_t current_image_id_ = 0;
+    uint64_t current_buffer_slot_ = 0;
+    uint64_t current_image_slot_ = 0;
+    uint64_t current_resource_id_ = 1;
 
     std::unordered_map<BufferHandle, AllocatedResource<VkBuffer, BufferDesc>> buffers_;
     std::unordered_map<ImageHandle, AllocatedResource<VkImage, ImageDesc>> images_;

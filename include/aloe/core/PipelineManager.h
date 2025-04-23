@@ -1,5 +1,7 @@
 #pragma once
 
+#include <aloe/core/Resources.h>
+
 #include <volk.h>
 
 #include <algorithm>
@@ -182,6 +184,12 @@ public:
     // Getters so unit tests can verify the validity of the code
     uint64_t get_pipeline_version( PipelineHandle ) const;
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle ) const;
+
+    // todo: temporary API for binding a resource
+    VkResult bind_buffer( ResourceManager& resource_manager,
+                          BufferHandle buffer_handle,
+                          VkDeviceSize offset = 0,
+                          VkDeviceSize range = VK_WHOLE_SIZE );
 
     // todo: temporary APIs before we lift this into a higher level (CommandList) type API.
     UniformBlock& get_uniform_block( PipelineHandle h );

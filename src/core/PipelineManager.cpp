@@ -1,7 +1,7 @@
-#include <aloe/core/aloe.slang.h>
 #include <aloe/core/Device.h>
 #include <aloe/core/PipelineManager.h>
 #include <aloe/core/ResourceManager.h>
+#include <aloe/core/aloe.slang.h>
 #include <aloe/util/algorithms.h>
 #include <aloe/util/log.h>
 #include <aloe/util/vulkan_util.h>
@@ -204,6 +204,36 @@ uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
 
 const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
+}
+
+VkResult PipelineManager::bind_buffer( ResourceManager& resource_manager,
+                                       BufferHandle buffer_handle,
+                                       VkDeviceSize offset,
+                                       VkDeviceSize range ) {
+    const auto buffer = resource_manager.get_buffer( buffer_handle );
+    if ( buffer == VK_NULL_HANDLE ) {
+        log_write( LogLevel::Error, "Failed to find buffer {} for binding", buffer_handle.id() );
+        return VK_ERROR_UNKNOWN;
+    }
+
+    const VkDescriptorBufferInfo buffer_info = {
+        .buffer = buffer,
+        .offset = offset,
+        .range = range,
+    };
+
+    const VkWriteDescriptorSet write_set{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = global_descriptor_set_,
+        .dstBinding = get_binding_slot( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ),
+        .dstArrayElement = static_cast<uint32_t>( buffer_handle.slot() ),
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .pBufferInfo = &buffer_info,
+    };
+
+    vkUpdateDescriptorSets( device_.device(), 1, &write_set, 0, nullptr );
+    return VK_SUCCESS;
 }
 
 UniformBlock& PipelineManager::get_uniform_block( PipelineHandle handle ) {
@@ -456,7 +486,7 @@ void PipelineManager::create_global_descriptor_layout() {
         std::vector<VkDescriptorSetLayoutBinding> layout_bindings;
         std::vector<VkDescriptorBindingFlags> binding_flags;
 
-        layout_bindings.emplace_back( get_binding_slot(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+        layout_bindings.emplace_back( get_binding_slot( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ),
                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                       limits.maxDescriptorSetStorageBuffers,
                                       VK_SHADER_STAGE_ALL,

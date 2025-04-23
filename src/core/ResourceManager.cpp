@@ -47,7 +47,7 @@ BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
         vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
     }
 
-    return buffers_.emplace( BufferHandle( current_buffer_id_++, 1, 1 ), buffer ).first->first;
+    return buffers_.emplace( BufferHandle( current_buffer_slot_++, 1, current_resource_id_++ ), buffer ).first->first;
 }
 
 ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
@@ -85,7 +85,7 @@ ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
         vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
     }
 
-    return images_.emplace( ImageHandle( current_image_id_++, 1, 1 ), image ).first->first;
+    return images_.emplace( ImageHandle( current_image_slot_++, 1, current_resource_id_++ ), image ).first->first;
 }
 
 VkDeviceSize ResourceManager::upload_to_buffer( BufferHandle handle, const void* data, VkDeviceSize size ) {
@@ -162,6 +162,9 @@ void ResourceManager::free_buffer( BufferHandle handle ) {
     if ( iter != buffers_.end() ) {
         vmaDestroyBuffer( allocator_, iter->second.resource, iter->second.allocation );
         buffers_.erase( iter );
+
+        // const auto slot = iter->first.slot();
+        // todo: mark `slot` as free
     }
 }
 
@@ -171,6 +174,9 @@ void ResourceManager::free_image( ImageHandle handle ) {
     if ( iter != images_.end() ) {
         vmaDestroyImage( allocator_, iter->second.resource, iter->second.allocation );
         images_.erase( iter );
+
+        // const auto slot = iter->first.slot();
+        // todo: mark `slot` as free
     }
 }
 

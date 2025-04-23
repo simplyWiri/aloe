@@ -1,5 +1,6 @@
 #include <aloe/core/Device.h>
 #include <aloe/core/PipelineManager.h>
+#include <aloe/core/ResourceManager.h>
 #include <aloe/util/log.h>
 
 #include <GLFW/glfw3.h>
@@ -14,6 +15,7 @@ protected:
     std::shared_ptr<aloe::MockLogger> mock_logger_;
     std::unique_ptr<aloe::Device> device_;
     std::shared_ptr<aloe::PipelineManager> pipeline_manager_;
+    std::shared_ptr<aloe::ResourceManager> resource_manager_;
     spvtools::SpirvTools spirv_tools_{ SPV_ENV_VULKAN_1_3 };
 
     void SetUp() override {
@@ -23,6 +25,7 @@ protected:
 
         device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
         pipeline_manager_ = device_->make_pipeline_manager( { "resources" } );
+        resource_manager_ = device_->make_resource_manager();
 
         spirv_tools_.SetMessageConsumer(
             [&]( spv_message_level_t level, const char* source, const spv_position_t& position, const char* message ) {
@@ -32,6 +35,7 @@ protected:
     }
 
     void TearDown() override {
+        resource_manager_.reset();
         pipeline_manager_.reset();
         device_.reset( nullptr );
 
@@ -457,6 +461,36 @@ TEST_F( PipelineManagerTestFixture, UniformBlockNoUniforms ) {
     auto& block = pipeline_manager_->get_uniform_block( *result );
     EXPECT_EQ( block.size(), 0 );               // Expect zero size
     EXPECT_TRUE( block.get_bindings().empty() );// Expect no bindings
+}
+
+// Compile a simple shader from file and verify success and valid output
+TEST_F( PipelineManagerTestFixture, SimpleBufferBindingWorks ) {
+    // Compile the test shader, ensure it is valid.
+    const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
+
+    // Allocate a buffer
+    const auto buffer = resource_manager_->create_buffer( {
+        .size = sizeof(float) * 128,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "Test Buffer"
+    } );
+
+    const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
+    EXPECT_EQ(result, VK_SUCCESS);
+}
+
+TEST_F( PipelineManagerTestFixture, InvalidBufferBindingFailsGracefully ) {
+    // Compile the test shader, ensure it is valid.
+    const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
+
+    // Allocate a fake buffer, which does not exist.
+    const auto buffer = aloe::BufferHandle(1, 5, 23);
+    const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
+    EXPECT_NE(result, VK_SUCCESS);
 }
 
 // todo:
