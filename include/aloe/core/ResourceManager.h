@@ -32,6 +32,8 @@ struct ImageDesc {
 };
 
 class ResourceManager {
+    friend class Device;
+
     template<typename ResourceT, typename ResourceDescT>
     struct AllocatedResource {
         ResourceT resource = VK_NULL_HANDLE;
@@ -49,8 +51,13 @@ class ResourceManager {
     std::unordered_map<ImageHandle, AllocatedResource<VkImage, ImageDesc>> images_;
 
 public:
-    explicit ResourceManager( Device& device );
     ~ResourceManager();
+
+    ResourceManager( ResourceManager& ) = delete;
+    ResourceManager& operator=( const ResourceManager& other ) = delete;
+
+    ResourceManager( ResourceManager&& ) = delete;
+    ResourceManager& operator=( ResourceManager&& other ) = delete;
 
     BufferHandle create_buffer( const BufferDesc& desc );
     ImageHandle create_image( const ImageDesc& desc );
@@ -64,6 +71,9 @@ public:
 
     void free_buffer( BufferHandle handle );
     void free_image( ImageHandle handle );
+
+private:
+    explicit ResourceManager( Device& device );
 };
 
 }// namespace aloe

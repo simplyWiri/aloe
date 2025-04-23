@@ -1,7 +1,6 @@
 #pragma once
 
-#include <aloe/core/Device.h>
-#include <aloe/core/Resources.h>
+#include <volk.h>
 
 #include <algorithm>
 #include <expected>
@@ -18,7 +17,7 @@ struct PreprocessorMacroDesc;
 }// namespace slang
 
 namespace aloe {
-
+class Device;
 class ResourceManager;
 
 struct ShaderCompileInfo {
@@ -92,6 +91,7 @@ private:
 struct SlangFilesystem;
 
 class PipelineManager {
+    friend class Device;
     // Represents a shader file on disk, that has been linked to its dependencies, but has not yet been
     // compiled for a particular entry point, you need an `entry_point` name to turn this into a
     // `CompiledShaderState` object.
@@ -163,8 +163,13 @@ class PipelineManager {
     VkDescriptorSet global_descriptor_set_ = VK_NULL_HANDLE;
 
 public:
-    PipelineManager( Device& device, std::vector<std::string> root_paths );
     ~PipelineManager();
+
+    PipelineManager( PipelineManager& ) = delete;
+    PipelineManager& operator=( const PipelineManager& other ) = delete;
+
+    PipelineManager( PipelineManager&& ) = delete;
+    PipelineManager& operator=( PipelineManager&& other ) = delete;
 
     // Primary method for interaction with the API
     std::expected<PipelineHandle, std::string> compile_pipeline( const ComputePipelineInfo& pipeline_info );
@@ -214,6 +219,9 @@ private:
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
     std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
+
+protected:
+    PipelineManager( Device& device, std::vector<std::string> root_paths );
 };
 
 }// namespace aloe

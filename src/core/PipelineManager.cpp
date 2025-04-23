@@ -1,4 +1,5 @@
 #include <aloe/core/aloe.slang.h>
+#include <aloe/core/Device.h>
 #include <aloe/core/PipelineManager.h>
 #include <aloe/core/ResourceManager.h>
 #include <aloe/util/algorithms.h>

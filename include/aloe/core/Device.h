@@ -5,10 +5,15 @@
 
 #define VK_ENABLE_BETA_EXTENSIONS
 #include <volk.h>
+#include <vma/vma.h>
 
 typedef struct VmaAllocator_T* VmaAllocator;
 
 namespace aloe {
+class PipelineManager;
+class ResourceManager;
+struct SwapchainSettings;
+class Swapchain;
 
 struct DeviceSettings {
     const char* name = "aloe application";
@@ -34,6 +39,7 @@ public:
         uint32_t num_warning{ 0 };
         uint32_t num_error{ 0 };
         uint32_t num_unknown{ 0 };
+        VmaTotalStatistics memory_stats_;
     };
 
     struct Queue {
@@ -65,6 +71,10 @@ private:
     std::vector<Queue> queues_;
     VmaAllocator allocator_ = VK_NULL_HANDLE;
 
+    std::shared_ptr<PipelineManager> pipeline_manager_ = nullptr;
+    std::shared_ptr<ResourceManager> resource_manager_ = nullptr;
+    std::shared_ptr<Swapchain> swapchain_ = nullptr;
+
 public:
     // Attempt to construct a new device
     Device( DeviceSettings settings );
@@ -83,6 +93,10 @@ public:
     VmaAllocator allocator() const { return allocator_; }
     bool validation_enabled() const { return enable_validation_; }
     std::vector<Queue> queues_by_capability( VkQueueFlagBits capability ) const;
+
+    std::shared_ptr<PipelineManager> make_pipeline_manager(const std::vector<std::string>& root_paths);
+    std::shared_ptr<ResourceManager> make_resource_manager();
+    std::shared_ptr<Swapchain> make_swapchain(const SwapchainSettings& settings);
 
     static const DebugInformation& debug_info() { return debug_info_; }
 

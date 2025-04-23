@@ -10,7 +10,7 @@ class ResourceManagerTestFixture : public ::testing::Test {
 protected:
     std::shared_ptr<aloe::MockLogger> mock_logger_;
     std::unique_ptr<aloe::Device> device_;
-    std::unique_ptr<aloe::ResourceManager> resource_manager_;
+    std::shared_ptr<aloe::ResourceManager> resource_manager_;
 
     void SetUp() override {
         mock_logger_ = std::make_shared<aloe::MockLogger>();
@@ -18,22 +18,19 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
         device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
-        resource_manager_ = std::make_unique<aloe::ResourceManager>( *device_ );
+        resource_manager_ = device_->make_resource_manager();
     }
 
     void TearDown() override {
-        resource_manager_.reset( nullptr );
-
-        VmaTotalStatistics stats;
-        vmaCalculateStatistics( device_->allocator(), &stats );
-
-        // There should be zero dangling allocations
-        EXPECT_EQ( stats.total.statistics.allocationCount, 0 );
-
+        resource_manager_.reset();
         device_.reset( nullptr );
 
-        // No validation errors
         auto& debug_info = aloe::Device::debug_info();
+
+        // No memory leaks
+        EXPECT_EQ( debug_info.memory_stats_.total.statistics.allocationCount, 0 );
+
+        // No validation errors
         EXPECT_EQ( debug_info.num_warning, 0 );
         EXPECT_EQ( debug_info.num_error, 0 );
 
@@ -50,7 +47,7 @@ TEST_F( ResourceManagerTestFixture, TestResourceIdPacking ) {
         EXPECT_EQ( res.version(), 456 );
         EXPECT_EQ( res.id(), 789 );
 
-        EXPECT_EQ( res.raw(), 123ull + (456ull << 24) + (789ull << 40) );
+        EXPECT_EQ( res.raw(), 123ull + ( 456ull << 24 ) + ( 789ull << 40 ) );
     }
 
     {

@@ -97,19 +97,19 @@ protected:
 };
 
 TEST_F( SwapchainTestFixture, SwapchainInitialization ) {
-    EXPECT_NO_THROW( aloe::Swapchain( *device_, {} ) );
+    EXPECT_NO_THROW( device_->make_swapchain( {} ) );
 }
 
 TEST_F( SwapchainTestFixture, WindowResizes ) {
-    auto swapchain = aloe::Swapchain( *device_, {} );
-    auto* window = swapchain.window();
+    auto swapchain = device_->make_swapchain( {} );
+    auto* window = swapchain->window();
 
     int width, height;
     glfwGetWindowSize( window, &width, &height );
 
     // Resize the window, from the basic width, down to zero on one axis.
     int i = 1;
-    while ( !swapchain.poll_events() ) {
+    while ( !swapchain->poll_events() ) {
         const auto next_width = std::max( 0, width - ( 10 * i++ ) );
         glfwSetWindowSize( window, next_width, height );
 
@@ -118,11 +118,11 @@ TEST_F( SwapchainTestFixture, WindowResizes ) {
 }
 
 TEST_F( SwapchainTestFixture, AcquireNextImageSucceeds ) {
-    auto swapchain = aloe::Swapchain( *device_, {} );
+    auto swapchain = device_->make_swapchain( {} );
     VkSemaphore image_avail_semaphore = create_semaphore();
 
     // Call acquire_next_image
-    const auto render_target = swapchain.acquire_next_image( image_avail_semaphore );
+    const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
     ASSERT_TRUE( render_target.has_value() ) << "Swapchain::acquire_next_image failed";
     EXPECT_NE( render_target->image, VK_NULL_HANDLE );
     EXPECT_NE( render_target->view, VK_NULL_HANDLE );
@@ -131,22 +131,22 @@ TEST_F( SwapchainTestFixture, AcquireNextImageSucceeds ) {
 }
 
 TEST_F( SwapchainTestFixture, AcquireNextImageFailsDueToResizeSucceeds ) {
-    auto swapchain = aloe::Swapchain( *device_, {} );
+    auto swapchain = device_->make_swapchain( {} );
 
     int width, height;
-    glfwGetWindowSize( swapchain.window(), &width, &height );
-    glfwSetWindowSize( swapchain.window(), 0, 0 );
+    glfwGetWindowSize( swapchain->window(), &width, &height );
+    glfwSetWindowSize( swapchain->window(), 0, 0 );
 
     {
         const auto image_avail_semaphore = create_semaphore();
-        if ( swapchain.acquire_next_image( image_avail_semaphore ) == std::nullopt ) {
+        if ( swapchain->acquire_next_image( image_avail_semaphore ) == std::nullopt ) {
             // If we fail to acquire the render target, we need to ensure that after it has been fixed, we can re-acquire with
             // the same Semaphore.
 
-            glfwSetWindowSize( swapchain.window(), width, height );
-            swapchain.poll_events();
+            glfwSetWindowSize( swapchain->window(), width, height );
+            swapchain->poll_events();
 
-            const auto render_target = swapchain.acquire_next_image( image_avail_semaphore );
+            const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
             ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
         }
 
@@ -156,12 +156,12 @@ TEST_F( SwapchainTestFixture, AcquireNextImageFailsDueToResizeSucceeds ) {
 }
 
 TEST_F( SwapchainTestFixture, PresentSucceeds ) {
-    auto swapchain = aloe::Swapchain( *device_, {} );
+    auto swapchain = device_->make_swapchain( {} );
     VkSemaphore image_avail_semaphore = create_semaphore();
     VkSemaphore render_finished_semaphore = create_semaphore();
 
     // Acquire an image first
-    const auto render_target = swapchain.acquire_next_image( image_avail_semaphore );
+    const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
     ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
 
     // Retrieve graphics queue for presentation
@@ -189,7 +189,7 @@ TEST_F( SwapchainTestFixture, PresentSucceeds ) {
     vkQueueWaitIdle( queue.queue );
 
     // Then call present using the semaphore
-    VkResult present_result = swapchain.present( queue.queue, render_finished_semaphore );
+    VkResult present_result = swapchain->present( queue.queue, render_finished_semaphore );
     EXPECT_TRUE( present_result == VK_SUCCESS ) << "Presentation failed unexpectedly";
 
     vkDeviceWaitIdle( device_->device() );
@@ -199,14 +199,14 @@ TEST_F( SwapchainTestFixture, PresentSucceeds ) {
 }
 
 TEST_F( SwapchainTestFixture, PresentFailsDueToResize ) {
-    auto swapchain = aloe::Swapchain( *device_, {} );
-    auto* window = swapchain.window();
+    auto swapchain = device_->make_swapchain( {} );
+    auto* window = swapchain->window();
 
     VkSemaphore image_avail_semaphore = create_semaphore();
     VkSemaphore render_finished_semaphore = create_semaphore();
 
     // Acquire an image first
-    const auto render_target = swapchain.acquire_next_image( image_avail_semaphore );
+    const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
     ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
 
     // Retrieve graphics queue for presentation
@@ -238,7 +238,7 @@ TEST_F( SwapchainTestFixture, PresentFailsDueToResize ) {
     glfwSetWindowSize( window, 0, 0 );
 
     // Then call present using the semaphore
-    VkResult present_result = swapchain.present( queue.queue, render_finished_semaphore );
+    VkResult present_result = swapchain->present( queue.queue, render_finished_semaphore );
     EXPECT_TRUE( present_result != VK_SUCCESS ) << "Presentation succeeded unexpectedly";
 
     vkDeviceWaitIdle( device_->device() );

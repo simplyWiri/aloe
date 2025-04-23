@@ -1,3 +1,4 @@
+#include <aloe/core/Device.h>
 #include <aloe/core/PipelineManager.h>
 #include <aloe/util/log.h>
 
@@ -21,8 +22,7 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
         device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
-        pipeline_manager_ =
-            std::make_shared<aloe::PipelineManager>( *device_, std::vector<std::string>{ "resources" } );
+        pipeline_manager_ = device_->make_pipeline_manager( { "resources" } );
 
         spirv_tools_.SetMessageConsumer(
             [&]( spv_message_level_t level, const char* source, const spv_position_t& position, const char* message ) {

@@ -8,7 +8,6 @@
 struct GLFWwindow;
 
 namespace aloe {
-
 class Device;
 
 struct SwapchainSettings {
@@ -28,6 +27,8 @@ struct RenderTarget {
 
 // An abstraction which managers the window, input, surface & swapchain for Vulkan
 class Swapchain {
+    friend class Device;
+
     constexpr static VkSurfaceFormatKHR hdr_target = { VK_FORMAT_A2B10G10R10_UNORM_PACK32,
                                                        VK_COLOR_SPACE_HDR10_ST2084_EXT };
     constexpr static VkSurfaceFormatKHR sdr_target = { VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
@@ -51,7 +52,6 @@ class Swapchain {
     uint32_t current_image_index_ = 0;
 
 public:
-    Swapchain( const Device& device, SwapchainSettings settings );
     ~Swapchain();
 
     Swapchain( Swapchain& ) = delete;
@@ -81,6 +81,9 @@ private:
     // GLFW Callbacks
     static void glfw_error_callback( int error_code, const char* message );
     static void window_resized( GLFWwindow* window, int width, int height );
+
+private:
+    Swapchain( const Device& device, SwapchainSettings settings );
 };
 
 }// namespace aloe

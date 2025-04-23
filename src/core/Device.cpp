@@ -1,10 +1,14 @@
 #include <aloe/core/Device.h>
+#include <aloe/core/PipelineManager.h>
+#include <aloe/core/ResourceManager.h>
+#include <aloe/core/Swapchain.h>
 #include <aloe/util/log.h>
 #include <aloe/util/vulkan_util.h>
 
 #include <GLFW/glfw3.h>
 #include <vma/vma.h>
 
+#include <cassert>
 #include <numeric>
 #include <ranges>
 
@@ -40,6 +44,24 @@ Device::Device( DeviceSettings settings ) : enable_validation_( settings.enable_
 std::vector<Device::Queue> Device::queues_by_capability( VkQueueFlagBits capability ) const {
     return queues_ | std::views::filter( [&]( auto& q ) { return q.properties.queueFlags & capability; } ) |
         std::ranges::to<std::vector>();
+}
+
+std::shared_ptr<PipelineManager> Device::make_pipeline_manager( const std::vector<std::string>& root_paths ) {
+    assert(pipeline_manager_ == nullptr);
+    pipeline_manager_ = std::shared_ptr<PipelineManager>(new PipelineManager(*this, root_paths ));
+    return pipeline_manager_;
+}
+
+std::shared_ptr<ResourceManager> Device::make_resource_manager() {
+    assert(resource_manager_ == nullptr);
+    resource_manager_ = std::shared_ptr<ResourceManager>(new ResourceManager(*this ));
+    return resource_manager_;
+}
+
+std::shared_ptr<Swapchain> Device::make_swapchain( const SwapchainSettings& settings ) {
+    assert(swapchain_ == nullptr);
+    swapchain_ = std::shared_ptr<Swapchain>(new Swapchain( *this, settings ));
+    return swapchain_;
 }
 
 VkResult Device::create_instance( Device& device, const DeviceSettings& settings ) {
@@ -361,7 +383,14 @@ VkBool32 Device::debug_callback( VkDebugUtilsMessageSeverityFlagBitsEXT message_
 
 
 Device::~Device() {
-    if ( allocator_ != VK_NULL_HANDLE ) { vmaDestroyAllocator( allocator_ ); }
+    resource_manager_.reset();
+    pipeline_manager_.reset();
+    swapchain_.reset();
+
+    if ( allocator_ != VK_NULL_HANDLE ) {
+        vmaCalculateStatistics( allocator_, &debug_info_.memory_stats_ );
+        vmaDestroyAllocator( allocator_ );
+    }
 
     if ( device_ != VK_NULL_HANDLE ) { vkDestroyDevice( device_, nullptr ); }
 
