@@ -226,6 +226,60 @@ TEST_F( ResourceManagerTestFixture, GetBufferValidation ) {
     EXPECT_TRUE( found_error );
 }
 
+TEST_F( ResourceManagerTestFixture, BufferHandleVersionValidation ) {
+    constexpr std::array<int, 4> a_data = { 1, 2, 3, 4 };
+    constexpr std::array<int, 4> b_data = { 5, 6, 7, 8 };
+    constexpr auto data_size = 4 * sizeof( int );
+
+    const auto handle_a = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "BufferA",
+    } );
+
+
+    // Upload some test data to buffer A
+    EXPECT_EQ( resource_manager_->upload_to_buffer( handle_a, a_data.data(), data_size ), data_size );
+
+    // Free the buffer, verify it goes invalid instantly.
+    resource_manager_->free_buffer( handle_a );
+    EXPECT_EQ( resource_manager_->get_buffer( handle_a ), VK_NULL_HANDLE );
+
+    // Create a new buffer that should likely reuse the same slot
+    const auto handle_b = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "BufferB",
+    } );
+
+    // Upload different test data to buffer B
+    EXPECT_EQ( resource_manager_->upload_to_buffer( handle_b, b_data.data(), data_size ), data_size );
+    EXPECT_NE( resource_manager_->get_buffer( handle_b ), VK_NULL_HANDLE );
+    EXPECT_EQ( resource_manager_->get_buffer( handle_a ), VK_NULL_HANDLE );
+
+    // Read back data from handle_B to verify it's the right data
+    std::array<int, 4> read_back_data{};
+    EXPECT_EQ( resource_manager_->read_from_buffer( handle_b, read_back_data.data(), data_size ), data_size );
+    EXPECT_EQ( read_back_data, b_data );
+
+    // Attempt to read from handle_A (should fail)
+    std::array<int, 4> invalid_read_data{};
+    EXPECT_EQ( resource_manager_->read_from_buffer( handle_a, invalid_read_data.data(), data_size ), 0 );
+
+    // Verify proper error messages are logged for handle_A
+    const auto& entries = mock_logger_->get_entries();
+    bool found_version_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "version mismatch" ) != std::string::npos ) {
+            found_version_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_version_error );
+}
+
 TEST_F( ResourceManagerTestFixture, CreateImage ) {
     const auto handle = resource_manager_->create_image( {
         .extent = { 1024, 1024, 1 },

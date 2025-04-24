@@ -8,6 +8,11 @@
 namespace aloe {
 
 ResourceManager::ResourceManager( Device& device ) : device_( device ), allocator_( device.allocator() ) {
+    buffer_slot_versions_.resize( device_.get_physical_device_limits().maxDescriptorSetStorageBuffers, 0 );
+
+    log_write( LogLevel::Info,
+               "Device supports binding {} storage buffers in a single descriptor",
+               buffer_slot_versions_.size() );
 }
 
 ResourceManager::~ResourceManager() {
@@ -47,7 +52,11 @@ BufferHandle ResourceManager::create_buffer( const BufferDesc& desc ) {
         vkSetDebugUtilsObjectNameEXT( device_.device(), &debug_name_info );
     }
 
-    return buffers_.emplace( BufferHandle( current_buffer_slot_++, 1, current_resource_id_++ ), buffer ).first->first;
+    // Get current slot and increment version
+    const auto slot_index = current_buffer_slot_++;
+    const auto current_version = ++buffer_slot_versions_[slot_index];
+
+    return buffers_.emplace( BufferHandle( slot_index, current_version, current_resource_id_++ ), buffer ).first->first;
 }
 
 ImageHandle ResourceManager::create_image( const ImageDesc& desc ) {
@@ -138,11 +147,36 @@ VkDeviceSize ResourceManager::read_from_buffer( BufferHandle handle, void* out_d
 }
 
 const ResourceManager::AllocatedResource<VkBuffer, BufferDesc>* ResourceManager::find_buffer( BufferHandle handle ) {
+    auto report_error = [&]( std::string_view error_msg ) -> const AllocatedResource<VkBuffer, BufferDesc>* {
+        log_write( LogLevel::Error,
+                   "Invalid buffer handle {:#x} (resource_id: {}): {}",
+                   handle.raw(),
+                   handle.id(),
+                   error_msg );
+        return nullptr;
+    };
+
+    // Validate handle
+    if ( handle.id() == 0 ) { return report_error( "Invalid buffer handle: resource ID is 0" ); }
+
+    // Validate slot
+    if ( handle.slot() >= buffer_slot_versions_.size() ) {
+        return report_error( "Invalid buffer handle: slot out of range" );
+    }
+
+    // Validate version
+    if ( handle.version() != buffer_slot_versions_[handle.slot()] ) {
+        return report_error( std::format( "Invalid buffer handle: version mismatch (expected {}, got {})",
+                                          buffer_slot_versions_[handle.slot()],
+                                          handle.version() ) );
+    }
+
+    // Validate buffer exists
     const auto iter = buffers_.find( handle );
     if ( iter == buffers_.end() ) {
-        log_write( LogLevel::Error, "Invalid buffer handle {:#x} (resource_id: {})", handle.raw(), handle.id() );
-        return nullptr;
+        return report_error( "Invalid buffer handle: buffer not found in active buffers" );
     }
+
     return &iter->second;
 }
 
@@ -161,10 +195,11 @@ void ResourceManager::free_buffer( BufferHandle handle ) {
     assert( iter != buffers_.end() );
     if ( iter != buffers_.end() ) {
         vmaDestroyBuffer( allocator_, iter->second.resource, iter->second.allocation );
-        buffers_.erase( iter );
 
-        // const auto slot = iter->first.slot();
-        // todo: mark `slot` as free
+        // todo: pool "free" slots, instead of simple linear allocator approach
+        if ( const auto slot = iter->first.slot(); ( slot + 1 ) == current_buffer_slot_ ) { --current_buffer_slot_; }
+
+        buffers_.erase( iter );
     }
 }
 

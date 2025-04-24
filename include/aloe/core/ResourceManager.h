@@ -6,8 +6,11 @@
 #include <volk.h>
 
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace aloe {
 class Device;
@@ -48,6 +51,9 @@ class ResourceManager {
     uint64_t current_image_slot_ = 0;
     uint64_t current_resource_id_ = 1;
 
+    // Version tracking for slots
+    std::vector<uint32_t> buffer_slot_versions_;
+    
     std::unordered_map<BufferHandle, AllocatedResource<VkBuffer, BufferDesc>, ResourceId::Hash, ResourceId::Equal>
         buffers_;
     std::unordered_map<ImageHandle, AllocatedResource<VkImage, ImageDesc>, ResourceId::Hash, ResourceId::Equal> images_;
