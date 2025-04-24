@@ -185,15 +185,19 @@ public:
     uint64_t get_pipeline_version( PipelineHandle ) const;
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle ) const;
 
+    // todo: temporary API for binding a pipeline
+    void bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer, const UniformBlock& block ) const;
+
     // todo: temporary API for binding a resource
     VkResult bind_buffer( ResourceManager& resource_manager,
                           BufferHandle buffer_handle,
                           VkDeviceSize offset = 0,
-                          VkDeviceSize range = VK_WHOLE_SIZE );
+                          VkDeviceSize range = VK_WHOLE_SIZE ) const;
 
     // todo: temporary APIs before we lift this into a higher level (CommandList) type API.
     UniformBlock& get_uniform_block( PipelineHandle h );
     template<typename T>
+        requires( std::is_standard_layout_v<T> )
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, VkShaderStageFlags stage, std::string_view name ) const {
         for ( const auto& shader : pipelines_.at( h.id ).compiled_shaders ) {
             if ( shader.stage == stage ) {

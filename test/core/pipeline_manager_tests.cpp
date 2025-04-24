@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <numeric>
 
 #include <spirv-tools/libspirv.hpp>
 
@@ -60,17 +61,100 @@ protected:
 
     std::string make_compute_shader( const std::string& body,
                                      const std::string& uniforms = "",
-                                     const std::string& entry_point = "compute_main" ) {
+                                     const std::string& entry_point = "compute_main",
+                                     uint32_t num_threads_x = 64 ) {
         return std::format( R"(
+import aloe;
+
 [shader("compute")]
-[numthreads(1, 1, 1)]
+[numthreads({}, 1, 1)]
 void {}(uint3 id : SV_DispatchThreadID{}) {{
     {}
 }}
 )",
+                            num_threads_x,
+                            1,
+                            1,
                             entry_point,
                             uniforms.empty() ? "" : ( ", " + uniforms ),
                             body );
+    }
+
+
+    aloe::BufferHandle create_and_upload_buffer( const char* name, const std::vector<float>& data = {} ) {
+        const VkDeviceSize buffer_size = sizeof( float ) * data.size();
+
+        aloe::BufferDesc desc = { .size = buffer_size,
+                                  .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                  .memory_usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                  .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                      VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                                  .name = name };
+
+        aloe::BufferHandle handle = resource_manager_->create_buffer( desc );
+
+        if ( !data.empty() ) {
+            const VkDeviceSize uploaded_bytes = resource_manager_->upload_to_buffer( handle, data.data(), buffer_size );
+            EXPECT_EQ( uploaded_bytes, buffer_size ) << "Failed to upload buffer: " << name;
+        }
+
+        return handle;
+    }
+
+
+    void execute_compute_shader( const std::function<void( VkCommandBuffer )>& record_commands ) {
+        VkCommandPool command_pool = VK_NULL_HANDLE;
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        const auto compute_queue = device_->queues_by_capability( VK_QUEUE_COMPUTE_BIT ).front();
+
+        VkCommandPoolCreateInfo pool_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = compute_queue.family_index,
+        };
+        ASSERT_EQ( vkCreateCommandPool( device_->device(), &pool_info, nullptr, &command_pool ), VK_SUCCESS )
+            << "Failed to create command pool.";
+
+        VkCommandBufferAllocateInfo alloc_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = command_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        ASSERT_EQ( vkAllocateCommandBuffers( device_->device(), &alloc_info, &command_buffer ), VK_SUCCESS )
+            << "Failed to allocate command buffer.";
+
+        VkCommandBufferBeginInfo begin_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        ASSERT_EQ( vkBeginCommandBuffer( command_buffer, &begin_info ), VK_SUCCESS )
+            << "Failed to begin command buffer.";
+
+        record_commands( command_buffer );
+
+        ASSERT_EQ( vkEndCommandBuffer( command_buffer ), VK_SUCCESS ) << "Failed to end command buffer.";
+
+        VkSubmitInfo submit_info{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+        };
+
+        VkFence fence = VK_NULL_HANDLE;
+        VkFenceCreateInfo fence_info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+        ASSERT_EQ( vkCreateFence( device_->device(), &fence_info, nullptr, &fence ), VK_SUCCESS )
+            << "Failed to create fence.";
+
+        ASSERT_EQ( vkQueueSubmit( compute_queue.queue, 1, &submit_info, fence ), VK_SUCCESS )
+            << "Failed to submit command buffer.";
+        ASSERT_EQ( vkWaitForFences( device_->device(), 1, &fence, VK_TRUE, UINT64_MAX ), VK_SUCCESS )
+            << "Failed to wait for fence.";
+
+        // Destroy resources.
+        vkDestroyFence( device_->device(), fence, nullptr );
+        vkDestroyCommandPool( device_->device(), command_pool, nullptr );
     }
 };
 
@@ -472,13 +556,13 @@ TEST_F( PipelineManagerTestFixture, SimpleBufferBindingWorks ) {
 
     // Allocate a buffer
     const auto buffer = resource_manager_->create_buffer( {
-        .size = sizeof(float) * 128,
+        .size = sizeof( float ) * 128,
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .name = "Test Buffer"
+        .name = "Test Buffer",
     } );
 
     const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
-    EXPECT_EQ(result, VK_SUCCESS);
+    EXPECT_EQ( result, VK_SUCCESS );
 }
 
 TEST_F( PipelineManagerTestFixture, InvalidBufferBindingFailsGracefully ) {
@@ -488,12 +572,136 @@ TEST_F( PipelineManagerTestFixture, InvalidBufferBindingFailsGracefully ) {
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 
     // Allocate a fake buffer, which does not exist.
-    const auto buffer = aloe::BufferHandle(1, 5, 23);
+    const auto buffer = aloe::BufferHandle( 1, 5, 23 );
     const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
-    EXPECT_NE(result, VK_SUCCESS);
+    EXPECT_NE( result, VK_SUCCESS );
+}
+
+// E2E Tests execute compute shaders on the GPU to verify behaviour.
+TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
+    constexpr size_t num_elements = 64;
+    constexpr VkDeviceSize buffer_size = num_elements * sizeof( float );
+
+    std::vector<float> initial_data( num_elements );
+    std::iota( initial_data.begin(), initial_data.end(), 1.0f );
+
+    std::vector<float> expected_data = initial_data;
+    for ( float& val : expected_data ) { val *= 2.0f; }
+
+    auto buffer_handle = create_and_upload_buffer( "DataModificationBuffer", initial_data );
+    pipeline_manager_->bind_buffer( *resource_manager_, buffer_handle );
+
+    std::string shader_body = R"(
+        RWByteAddressBuffer buf = data_buffer.get();
+        uint address = id.x * sizeof(float);
+
+        float value = buf.Load<float>(address);
+        buf.Store<float>(address, value * 2.0f);
+    )";
+
+    pipeline_manager_->set_virtual_file(
+        "e2e_compute.slang",
+        make_compute_shader( shader_body, "uniform aloe::BufferHandle data_buffer", "compute_main", num_elements ) );
+
+    aloe::ShaderCompileInfo shader_info{ .name = "e2e_compute.slang", .entry_point = "compute_main" };
+    auto pipeline_handle_result = compile_and_validate( { shader_info } );
+    ASSERT_TRUE( pipeline_handle_result.has_value() ) << pipeline_handle_result.error();
+    aloe::PipelineHandle pipeline_handle = *pipeline_handle_result;
+
+    auto& block_ptr = pipeline_manager_->get_uniform_block( pipeline_handle );
+    auto uniform_handle = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
+                                                                                     VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                                     "data_buffer" );
+    block_ptr.set( uniform_handle.set_value( buffer_handle ) );
+
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( pipeline_handle, cmd, block_ptr );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
+
+    std::vector<float> readback_data( num_elements );
+    VkDeviceSize read_bytes = resource_manager_->read_from_buffer( buffer_handle, readback_data.data(), buffer_size );
+    ASSERT_EQ( read_bytes, buffer_size );
+
+    ASSERT_EQ( readback_data.size(), expected_data.size() );
+    for ( size_t i = 0; i < num_elements; ++i ) {
+        EXPECT_FLOAT_EQ( readback_data[i], expected_data[i] ) << "Mismatch at index " << i;
+    }
+}
+
+TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
+    constexpr size_t num_elements = 64;
+
+    std::vector<float> input_data_1( num_elements );
+    std::vector<float> input_data_2( num_elements );
+    std::vector<float> expected_data( num_elements );
+
+    std::iota( input_data_1.begin(), input_data_1.end(), 1.0f );
+    std::iota( input_data_2.begin(), input_data_2.end(), 2.0f );
+    for ( size_t i = 0; i < num_elements; ++i ) { expected_data[i] = input_data_1[i] * input_data_2[i]; }
+
+    auto buffer1 = create_and_upload_buffer( "InputBuffer1", input_data_1 );
+    auto buffer2 = create_and_upload_buffer( "InputBuffer2", input_data_2 );
+    auto buffer3 = create_and_upload_buffer( "OutputBuffer", std::vector<float>( num_elements ) );
+
+    pipeline_manager_->bind_buffer( *resource_manager_, buffer1 );
+    pipeline_manager_->bind_buffer( *resource_manager_, buffer2 );
+    pipeline_manager_->bind_buffer( *resource_manager_, buffer3 );
+
+    std::string shader_body = R"(
+        RWByteAddressBuffer buffer1 = buffer1_handle.get();
+        RWByteAddressBuffer buffer2 = buffer2_handle.get();
+        RWByteAddressBuffer buffer3 = buffer3_handle.get();
+
+        uint index = id.x * sizeof(float);
+        float value1 = buffer1.Load<float>(index);
+        float value2 = buffer2.Load<float>(index);
+
+        buffer3.Store<float>(index, value1 * value2);
+    )";
+
+    pipeline_manager_->set_virtual_file( "multiply_buffers.slang",
+                                         make_compute_shader( shader_body,
+                                                              "uniform aloe::BufferHandle buffer1_handle, "
+                                                              "uniform aloe::BufferHandle buffer2_handle, "
+                                                              "uniform aloe::BufferHandle buffer3_handle",
+                                                              "compute_main",
+                                                              num_elements ) );
+
+    const aloe::ShaderCompileInfo shader_info{ .name = "multiply_buffers.slang", .entry_point = "compute_main" };
+    aloe::PipelineHandle pipeline_handle = *compile_and_validate( { shader_info } );
+
+    auto& block_ptr = pipeline_manager_->get_uniform_block( pipeline_handle );
+
+    block_ptr.set(
+        pipeline_manager_
+            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer1_handle" )
+            .set_value( buffer1 ) );
+    block_ptr.set(
+        pipeline_manager_
+            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer2_handle" )
+            .set_value( buffer2 ) );
+    block_ptr.set(
+        pipeline_manager_
+            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer3_handle" )
+            .set_value( buffer3 ) );
+
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( pipeline_handle, cmd, block_ptr );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
+
+    std::vector<float> readback_data( num_elements );
+    VkDeviceSize read_bytes =
+        resource_manager_->read_from_buffer( buffer3, readback_data.data(), sizeof( float ) * num_elements );
+    ASSERT_EQ( read_bytes, sizeof( float ) * num_elements );
+
+    ASSERT_EQ( readback_data.size(), expected_data.size() );
+    for ( size_t i = 0; i < num_elements; ++i ) {
+        EXPECT_FLOAT_EQ( readback_data[i], expected_data[i] ) << "Mismatch at index " << i;
+    }
 }
 
 // todo:
-// 1. Test usage of a shared resource (i.e. aloe::BufferHandle) as a uniform :y:
 // 2. Test usage of overlapping ranges once graphics pipelines are supported :y:
 // 3. Test usage of equivalent ranges once graphics pipelines are supported :n:

@@ -17,12 +17,25 @@ constexpr static int get_binding_slot( VkDescriptorType type ) {
     }
 }
 
-std::string aloe_shader_template() {
+inline std::string aloe_shader_template() {
     return R"(
 module aloe;
 
 [[vk::binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0)]]
 public RWByteAddressBuffer g_buffers[];
+
+namespace aloe {
+
+public struct BufferHandle {
+    private constexpr static int64_t SLOT_INDEX_MASK = (1 << 24) - 1;
+    private int64_t id;
+
+    public RWByteAddressBuffer get() {
+        return g_buffers[int(id & SLOT_INDEX_MASK)];
+    }
+};
+
+}
 
 )";
 }

@@ -206,10 +206,26 @@ const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
 }
 
+void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer, const UniformBlock& block ) const {
+    const auto pipeline = pipelines_.at( handle.id );
+
+    vkCmdBindDescriptorSets( buffer,
+                             VK_PIPELINE_BIND_POINT_COMPUTE,
+                             pipeline.layout,
+                             0,
+                             1,
+                             &global_descriptor_set_,
+                             0,
+                             nullptr );
+
+    vkCmdPushConstants( buffer, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, block.size(), block.data() );
+    vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline );
+}
+
 VkResult PipelineManager::bind_buffer( ResourceManager& resource_manager,
                                        BufferHandle buffer_handle,
                                        VkDeviceSize offset,
-                                       VkDeviceSize range ) {
+                                       VkDeviceSize range ) const {
     const auto buffer = resource_manager.get_buffer( buffer_handle );
     if ( buffer == VK_NULL_HANDLE ) {
         log_write( LogLevel::Error, "Failed to find buffer {} for binding", buffer_handle.id() );
