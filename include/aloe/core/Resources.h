@@ -2,6 +2,8 @@
 
 #include <cassert>
 #include <cstdint>
+#include <compare>
+#include <unordered_map>
 
 namespace aloe {
 

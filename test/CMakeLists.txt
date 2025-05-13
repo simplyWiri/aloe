@@ -1,15 +1,16 @@
 # Dummy test executable
 add_executable(core_tests
-    core/device_tests.cpp
-    core/resource_manager_tests.cpp
+        core/command_list_tests.cpp
+        core/device_tests.cpp
+        core/resource_manager_tests.cpp
 )
 
 add_executable(window_tests
-    core/swapchain_tests.cpp
+        core/swapchain_tests.cpp
 )
 
 add_executable(pipeline_tests
-    core/pipeline_manager_tests.cpp
+        core/pipeline_manager_tests.cpp
 )
 
 find_package(SPIRV-Tools CONFIG REQUIRED)
