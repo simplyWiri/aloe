@@ -57,38 +57,6 @@ struct ShaderUniform {
     auto operator<=>( const ShaderUniform& ) const = default;
 };
 
-class UniformBlock {
-public:
-    struct StageBinding {
-        VkShaderStageFlags stage_flags = 0;
-        uint32_t offset = 0;
-        uint32_t size = 0;
-        auto operator<=>( const StageBinding& ) const = default;
-    };
-
-    explicit UniformBlock( const std::vector<StageBinding>& bindings, uint32_t total_size )
-        : stage_bindings_( bindings ) {
-        data_.resize( total_size );
-        std::ranges::fill( data_, uint8_t{ 0 } );
-    }
-
-    template<typename T>
-    void set( const ShaderUniform<T>& element ) {
-        assert( element.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data." );
-        std::memcpy( data_.data() + element.offset, &element.data.value(), sizeof( T ) );
-    }
-
-    const void* data() const { return data_.data(); }
-    std::size_t size() const { return data_.size(); }
-    const std::vector<StageBinding>& get_bindings() const { return stage_bindings_; }
-
-    auto operator<=>( const UniformBlock& other ) const = default;
-
-private:
-    std::vector<uint8_t> data_;
-    std::vector<StageBinding> stage_bindings_;
-};
-
 // Pimpl style forward declaration for slang internals.
 struct SlangFilesystem;
 
@@ -130,6 +98,38 @@ class PipelineManager {
         std::vector<Uniform> uniforms;// sorted by `offset`
 
         auto operator<=>( const CompiledShaderState& other ) const = default;
+    };
+
+    class UniformBlock {
+    public:
+        struct StageBinding {
+            VkShaderStageFlags stage_flags = 0;
+            uint32_t offset = 0;
+            uint32_t size = 0;
+            auto operator<=>( const StageBinding& ) const = default;
+        };
+
+        explicit UniformBlock( const std::vector<StageBinding>& bindings, uint32_t total_size )
+            : stage_bindings_( bindings ) {
+            data_.resize( total_size );
+            std::ranges::fill( data_, uint8_t{ 0 } );
+        }
+
+        template<typename T>
+        void set( const ShaderUniform<T>& element ) {
+            assert( element.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data." );
+            std::memcpy( data_.data() + element.offset, &element.data.value(), sizeof( T ) );
+        }
+
+        const void* data() const { return data_.data(); }
+        std::size_t size() const { return data_.size(); }
+        const std::vector<StageBinding>& get_bindings() const { return stage_bindings_; }
+
+        auto operator<=>( const UniformBlock& other ) const = default;
+
+    private:
+        std::vector<uint8_t> data_;
+        std::vector<StageBinding> stage_bindings_;
     };
 
     struct PipelineState {
@@ -186,7 +186,7 @@ public:
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle ) const;
 
     // todo: temporary API for binding a pipeline
-    void bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer, const UniformBlock& block ) const;
+    void bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
 
     // todo: temporary API for binding a resource
     VkResult bind_buffer( ResourceManager& resource_manager,
@@ -194,10 +194,12 @@ public:
                           VkDeviceSize offset = 0,
                           VkDeviceSize range = VK_WHOLE_SIZE ) const;
 
-    // todo: temporary APIs before we lift this into a higher level (CommandList) type API.
-    UniformBlock& get_uniform_block( PipelineHandle h );
     template<typename T>
-        requires( std::is_standard_layout_v<T> )
+    void set_uniform(PipelineHandle h, const ShaderUniform<T>& uniform) {
+        pipelines_.at(h.id).uniforms->set(uniform);
+    }
+
+    template<typename T> requires( std::is_standard_layout_v<T> )
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, VkShaderStageFlags stage, std::string_view name ) const {
         for ( const auto& shader : pipelines_.at( h.id ).compiled_shaders ) {
             if ( shader.stage == stage ) {
@@ -231,7 +233,6 @@ private:
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
     std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
-
 protected:
     PipelineManager( Device& device, std::vector<std::string> root_paths );
 };

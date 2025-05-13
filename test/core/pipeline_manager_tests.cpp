@@ -73,8 +73,6 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
 }}
 )",
                             num_threads_x,
-                            1,
-                            1,
                             entry_point,
                             uniforms.empty() ? "" : ( ", " + uniforms ),
                             body );
@@ -433,118 +431,133 @@ TEST_F( PipelineManagerTestFixture, CircularIncludesHandledGracefully ) {
 TEST_F( PipelineManagerTestFixture, UniformBlockBasicCompute ) {
     pipeline_manager_->set_virtual_file(
         "basic_uniform.slang",
-        make_compute_shader( "// body irrelevant", "uniform float time, uniform int frameCount" ) );
+        make_compute_shader(
+            R"(
+                RWByteAddressBuffer buf = outbuf_handle.get();
+                if (id.x == 0) {
+                    buf.Store<float>(0, time);
+                    buf.Store<int>(sizeof(uint), frameCount);
+                }
+            )",
+            "uniform float time, uniform int frameCount, uniform aloe::BufferHandle outbuf_handle",
+            "compute_main",
+            1 ) );
 
-    const aloe::ShaderCompileInfo shader{ .name = "basic_uniform.slang", .entry_point = "compute_main" };
-    const auto handle = compile_and_validate( { shader } );
-    ASSERT_TRUE( handle ) << handle.error();
+    const aloe::ShaderCompileInfo shader_info{ .name = "basic_uniform.slang", .entry_point = "compute_main" };
+    const auto pipeline_handle = compile_and_validate( { shader_info } );
+    ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
+    auto h_time = pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "time" );
+    auto h_frame =
+        pipeline_manager_->get_uniform_handle<int>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "frameCount" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
+                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                               "outbuf_handle" );
+    auto outbuf = create_and_upload_buffer( "UniformOut", { 0.0f, 0.0f } );
+    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    // 1. Get Handles and check offsets (Slang determines actual offsets)
-    auto h_time = pipeline_manager_->get_uniform_handle<float>( *handle, VK_SHADER_STAGE_COMPUTE_BIT, "time" );
-    auto h_frame = pipeline_manager_->get_uniform_handle<int>( *handle, VK_SHADER_STAGE_COMPUTE_BIT, "frameCount" );
+    // --- Set Uniforms ---
+    pipeline_manager_->set_uniform( *pipeline_handle, h_time.set_value( 123.45f ) );
+    pipeline_manager_->set_uniform( *pipeline_handle, h_frame.set_value( 99 ) );
+    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
 
-    // Ensure offsets are distinct and reasonable (depends on packing rules)
-    EXPECT_NE( h_time.offset, h_frame.offset );
-    EXPECT_LT( h_time.offset, 16 );// Likely within first few bytes
-    EXPECT_LT( h_frame.offset, 16 );
+    // --- Dispatch ---
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
 
-    // 2. Get the UniformBlock
-    auto& block = pipeline_manager_->get_uniform_block( *handle );
-
-    // 3. Verify Block Size and Bindings
-    // Size depends on packing, expect at least sizeof(float) + sizeof(int) = 8
-    // Slang might align frameCount to 4 bytes after time, so expect 8.
-    const uint32_t expected_size = h_frame.offset + sizeof( int );// Assumes frameCount is last
-    ASSERT_EQ( block.size(), expected_size );
-    ASSERT_EQ( block.get_bindings().size(), 1 );// One binding for compute stage
-
-    const auto& binding = block.get_bindings()[0];
-    EXPECT_EQ( binding.stage_flags, VK_SHADER_STAGE_COMPUTE_BIT );
-    EXPECT_EQ( binding.offset, h_time.offset );               // Starts at the first uniform's offset
-    EXPECT_EQ( binding.size, expected_size - binding.offset );// Covers the whole range used by compute
-
-    // 4. Set Data
-    block.set( h_time.set_value( 123.45f ) );
-    block.set( h_frame.set_value( 99 ) );
-
-    // 5. Verify Memory Contents
-    const auto* raw_data = static_cast<const uint8_t*>( block.data() );
-    EXPECT_FLOAT_EQ( *reinterpret_cast<const float*>( raw_data + h_time.offset ), 123.45f );
-    EXPECT_EQ( *reinterpret_cast<const int*>( raw_data + h_frame.offset ), 99 );
+    // --- Verify ---
+    std::vector<uint32_t> result_data( 2 );
+    resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) * 2 );
+    EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 123.45f );
+    EXPECT_EQ( result_data[1], 99u );
 }
 
-// Test reflection of a struct uniform
 TEST_F( PipelineManagerTestFixture, UniformBlockStruct ) {
     struct MyParams {
         float intensity;
         int mode;
     };
-
     pipeline_manager_->set_virtual_file( "struct_uniform.slang",
-                                         "struct MyParams { float intensity; int mode; };\n" +
-                                             make_compute_shader( "// body", "uniform MyParams params" ) );
+                                         std::string( "struct MyParams { float intensity; int mode; };\n" ) +
+                                             make_compute_shader(
+                                                 R"(
+                RWByteAddressBuffer buf = outbuf_handle.get();
+                buf.Store<float>(0, params.intensity);
+                buf.Store<int>(sizeof(float), params.mode);
+            )",
+                                                 "uniform MyParams params, uniform aloe::BufferHandle outbuf_handle",
+                                                 "compute_main",
+                                                 1 ) );
+    const aloe::ShaderCompileInfo shader_info{ .name = "struct_uniform.slang", .entry_point = "compute_main" };
+    const auto pipeline_handle = compile_and_validate( { shader_info } );
+    ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
+    auto h_params =
+        pipeline_manager_->get_uniform_handle<MyParams>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "params" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
+                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                               "outbuf_handle" );
+    auto outbuf = create_and_upload_buffer( "StructUniformOut", { 0.0f, 0.0f } );
+    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    const aloe::ShaderCompileInfo shader{ .name = "struct_uniform.slang", .entry_point = "compute_main" };
-    const auto result = compile_and_validate( { shader } );
-    ASSERT_TRUE( result ) << result.error();
+    // --- Set Uniforms ---
+    MyParams test_params = { 0.75f, 2 };
+    pipeline_manager_->set_uniform( *pipeline_handle, h_params.set_value( test_params ) );
+    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
 
-    auto h_params = pipeline_manager_->get_uniform_handle<MyParams>( *result, VK_SHADER_STAGE_COMPUTE_BIT, "params" );
-    EXPECT_EQ( h_params.offset, 0 );
+    // --- Dispatch ---
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
 
-    auto& block = pipeline_manager_->get_uniform_block( *result );
-    // Slang should ensure standard layout packing (e.g., std140/std430 rules might apply depending on context,
-    // but for push constants it's often tightly packed or uses explicit offsets). Assuming tight packing here.
-    ASSERT_EQ( block.size(), sizeof( MyParams ) );
-    ASSERT_EQ( block.get_bindings().size(), 1 );
-
-    const auto& binding = block.get_bindings().front();
-    EXPECT_EQ( binding.stage_flags, VK_SHADER_STAGE_COMPUTE_BIT );
-    EXPECT_EQ( binding.offset, 0 );
-    EXPECT_EQ( binding.size, sizeof( MyParams ) );
-
-    MyParams test_data = { 0.75f, 2 };
-    block.set( h_params.set_value( test_data ) );
-
-    const auto* raw_data = static_cast<const uint8_t*>( block.data() ) + h_params.offset;
-    const auto* cpu_data = reinterpret_cast<const uint8_t*>( &test_data );
-    const auto raw_slice = std::span( raw_data, binding.size );
-    const auto cpu_slice = std::span( cpu_data, binding.size );
-    EXPECT_TRUE( std::ranges::equal( raw_slice, cpu_slice ) );
+    // --- Verify ---
+    std::vector<uint32_t> result_data( 2 );
+    resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) * 2 );
+    EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 0.75f );
+    EXPECT_EQ( result_data[1], 2u );
 }
 
-// Test pipeline compilation fails if uniforms exceed maxPushConstantSize
-TEST_F( PipelineManagerTestFixture, UniformBlockExceedsSizeLimit ) {
-    const auto large_size = device_->get_physical_device_limits().maxPushConstantsSize + 4;
+TEST_F( PipelineManagerTestFixture, UniformPersistenceAcrossDispatches ) {
+    pipeline_manager_->set_virtual_file( "persist_uniform.slang",
+                                         make_compute_shader(
+                                             R"(
+                RWByteAddressBuffer buf = outbuf_handle.get();
+                buf.Store<float>(0, myval);
+            )",
+                                             "uniform float myval, uniform aloe::BufferHandle outbuf_handle",
+                                             "compute_main",
+                                             1 ) );
+    const aloe::ShaderCompileInfo shader_info{ .name = "persist_uniform.slang", .entry_point = "compute_main" };
+    const auto pipeline_handle = compile_and_validate( { shader_info } );
+    ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
+    auto h_myval =
+        pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "myval" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
+                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                               "outbuf_handle" );
+    auto outbuf = create_and_upload_buffer( "PersistUniformOut", { 0.0f } );
+    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    // Define a struct that is guaranteed to be larger than the limit
-    const auto shader_code =
-        std::format( "struct BigStruct {{ float data[{}]; }};\n", large_size / sizeof( float ) + 1 ) +
-        make_compute_shader( "// body", "uniform BigStruct large_uniform" );
+    // --- First dispatch ---
+    pipeline_manager_->set_uniform( *pipeline_handle, h_myval.set_value( 1.5f ) );
+    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
+    std::vector<uint32_t> result_data( 1 );
+    resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) );
+    EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 1.5f );
 
-    pipeline_manager_->set_virtual_file( "large_uniform.slang", shader_code );
-
-    const aloe::ShaderCompileInfo shader{ .name = "large_uniform.slang", .entry_point = "compute_main" };
-    const auto result = compile_and_validate( { shader } );
-
-    ASSERT_FALSE( result );// Expect failure
-    EXPECT_NE( result.error().find( "exceeds device limit" ), std::string::npos );
-    EXPECT_NE( result.error().find( std::to_string( device_->get_physical_device_limits().maxPushConstantsSize ) ),
-               std::string::npos );
-}
-
-
-// Test case for a shader with no uniforms at all
-TEST_F( PipelineManagerTestFixture, UniformBlockNoUniforms ) {
-    pipeline_manager_->set_virtual_file( "no_uniform.slang", make_compute_shader( "// body" ) );
-
-    const aloe::ShaderCompileInfo shader{ .name = "no_uniform.slang", .entry_point = "compute_main" };
-    const auto result = compile_and_validate( { shader } );
-    ASSERT_TRUE( result ) << result.error();
-
-    // Get the block - should exist but be empty
-    auto& block = pipeline_manager_->get_uniform_block( *result );
-    EXPECT_EQ( block.size(), 0 );               // Expect zero size
-    EXPECT_TRUE( block.get_bindings().empty() );// Expect no bindings
+    // --- Second dispatch ---
+    pipeline_manager_->set_uniform( *pipeline_handle, h_myval.set_value( 7.25f ) );
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
+        vkCmdDispatch( cmd, 1, 1, 1 );
+    } );
+    resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) );
+    EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 7.25f );
 }
 
 // Compile a simple shader from file and verify success and valid output
@@ -608,14 +621,14 @@ TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
     ASSERT_TRUE( pipeline_handle_result.has_value() ) << pipeline_handle_result.error();
     aloe::PipelineHandle pipeline_handle = *pipeline_handle_result;
 
-    auto& block_ptr = pipeline_manager_->get_uniform_block( pipeline_handle );
-    auto uniform_handle = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
-                                                                                     VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                                     "data_buffer" );
-    block_ptr.set( uniform_handle.set_value( buffer_handle ) );
+    auto h_data_buffer = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
+                                                                                    VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                                    "data_buffer" );
+
+    pipeline_manager_->set_uniform( pipeline_handle, h_data_buffer.set_value( buffer_handle ) );
 
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( pipeline_handle, cmd, block_ptr );
+        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
     } );
 
@@ -671,23 +684,22 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     const aloe::ShaderCompileInfo shader_info{ .name = "multiply_buffers.slang", .entry_point = "compute_main" };
     aloe::PipelineHandle pipeline_handle = *compile_and_validate( { shader_info } );
 
-    auto& block_ptr = pipeline_manager_->get_uniform_block( pipeline_handle );
+    auto h_buffer1 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
+                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                                "buffer1_handle" );
+    auto h_buffer2 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
+                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                                "buffer2_handle" );
+    auto h_buffer3 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
+                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                                "buffer3_handle" );
 
-    block_ptr.set(
-        pipeline_manager_
-            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer1_handle" )
-            .set_value( buffer1 ) );
-    block_ptr.set(
-        pipeline_manager_
-            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer2_handle" )
-            .set_value( buffer2 ) );
-    block_ptr.set(
-        pipeline_manager_
-            ->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "buffer3_handle" )
-            .set_value( buffer3 ) );
+    pipeline_manager_->set_uniform( pipeline_handle, h_buffer1.set_value( buffer1 ) );
+    pipeline_manager_->set_uniform( pipeline_handle, h_buffer2.set_value( buffer2 ) );
+    pipeline_manager_->set_uniform( pipeline_handle, h_buffer3.set_value( buffer3 ) );
 
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( pipeline_handle, cmd, block_ptr );
+        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
     } );
 

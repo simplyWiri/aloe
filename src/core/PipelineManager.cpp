@@ -206,8 +206,8 @@ const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
 }
 
-void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer, const UniformBlock& block ) const {
-    const auto pipeline = pipelines_.at( handle.id );
+void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const {
+    const auto& pipeline = pipelines_.at( handle.id );
 
     vkCmdBindDescriptorSets( buffer,
                              VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -218,7 +218,7 @@ void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buff
                              0,
                              nullptr );
 
-    vkCmdPushConstants( buffer, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, block.size(), block.data() );
+    vkCmdPushConstants( buffer, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pipeline.uniforms->size(), pipeline.uniforms->data() );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline );
 }
 
@@ -250,11 +250,6 @@ VkResult PipelineManager::bind_buffer( ResourceManager& resource_manager,
 
     vkUpdateDescriptorSets( device_.device(), 1, &write_set, 0, nullptr );
     return VK_SUCCESS;
-}
-
-UniformBlock& PipelineManager::get_uniform_block( PipelineHandle handle ) {
-    assert( pipelines_.at( handle.id ).uniforms );
-    return *pipelines_.at( handle.id ).uniforms;
 }
 
 Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
@@ -591,18 +586,17 @@ PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
     return compiled_shader;
 }
 
-std::expected<UniformBlock, std::string>
+std::expected<PipelineManager::UniformBlock, std::string>
 PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shaders ) {
     std::vector<UniformBlock::StageBinding> stage_bindings;
-    uint32_t global_max_offset = 0;// Tracks the highest byte offset needed across all stages
+    uint32_t global_max_offset = 0;
 
-    // track ranges per stage for overlap check (stage, min_offset, max_end_offset)
+    // track ranges per stage for overlap check
     std::vector<std::tuple<VkShaderStageFlags, uint32_t, uint32_t>> stage_ranges;
 
     for ( const auto& shader : shaders ) {
         if ( shader.uniforms.empty() ) continue;
 
-        // Ensure uniforms are sorted by offset (should be guaranteed by reflect_module)
         assert( std::ranges::is_sorted( shader.uniforms, {}, &CompiledShaderState::Uniform::offset ) );
 
         const uint32_t stage_min_offset = shader.uniforms.front().offset;
@@ -611,35 +605,10 @@ PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shad
 
         assert( stage_size > 0 );
 
-        // Update the overall maximum offset needed for the whole block
         global_max_offset = std::max( global_max_offset, stage_max_end_offset );
 
         stage_bindings.emplace_back( shader.stage, stage_min_offset, stage_size );
         stage_ranges.emplace_back( shader.stage, stage_min_offset, stage_max_end_offset );
-    }
-
-    for ( size_t i = 0; i + 1 < stage_ranges.size(); ++i ) {
-        const auto& [cur_stage, cur_min, cur_max] = stage_ranges[i];
-        const auto& [nxt_stage, nxt_min, nxt_max] = stage_ranges[i + 1];
-
-        // Check if current range's end overlaps next range's start
-        if ( cur_max > nxt_min ) {
-            // Find shader names for better error message
-            auto cur_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == cur_stage; } );
-            auto nxt_shader = std::ranges::find_if( shaders, [&]( const auto& s ) { return s.stage == nxt_stage; } );
-
-            return std::unexpected( std::format( "Overlapping push constant data ranges detected between stages:\n"
-                                                 "  Shader '{}' (Stage {}) uses range [{}, {})\n"
-                                                 "  Shader '{}' (Stage {}) uses range [{}, {})",
-                                                 cur_shader->name,
-                                                 cur_stage,
-                                                 cur_min,
-                                                 cur_max,
-                                                 nxt_shader->name,
-                                                 nxt_stage,
-                                                 nxt_min,
-                                                 nxt_max ) );
-        }
     }
 
     // Check if we are trying to create a push constant greater than our physical device capacities
