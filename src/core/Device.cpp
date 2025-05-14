@@ -303,41 +303,17 @@ void Device::gather_queues( Device& device ) {
 }
 
 VkResult Device::create_allocator( Device& device ) {
-    VmaVulkanFunctions vulkan_functions{};
-    vulkan_functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-    vulkan_functions.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-    vulkan_functions.vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties;
-    vulkan_functions.vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties;
-    vulkan_functions.vkAllocateMemory = vkAllocateMemory;
-    vulkan_functions.vkFreeMemory = vkFreeMemory;
-    vulkan_functions.vkMapMemory = vkMapMemory;
-    vulkan_functions.vkUnmapMemory = vkUnmapMemory;
-    vulkan_functions.vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges;
-    vulkan_functions.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
-    vulkan_functions.vkBindBufferMemory = vkBindBufferMemory;
-    vulkan_functions.vkBindImageMemory = vkBindImageMemory;
-    vulkan_functions.vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements;
-    vulkan_functions.vkGetImageMemoryRequirements = vkGetImageMemoryRequirements;
-    vulkan_functions.vkCreateBuffer = vkCreateBuffer;
-    vulkan_functions.vkDestroyBuffer = vkDestroyBuffer;
-    vulkan_functions.vkCreateImage = vkCreateImage;
-    vulkan_functions.vkDestroyImage = vkDestroyImage;
-    vulkan_functions.vkCmdCopyBuffer = vkCmdCopyBuffer;
-    vulkan_functions.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2KHR;
-    vulkan_functions.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2KHR;
-    vulkan_functions.vkBindBufferMemory2KHR = vkBindBufferMemory2KHR;
-    vulkan_functions.vkBindImageMemory2KHR = vkBindImageMemory2KHR;
-    vulkan_functions.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2KHR;
-    vulkan_functions.vkGetDeviceBufferMemoryRequirements = vkGetDeviceBufferMemoryRequirements;
-    vulkan_functions.vkGetDeviceImageMemoryRequirements = vkGetDeviceImageMemoryRequirements;
-
     VmaAllocatorCreateInfo allocator_info = {
         .physicalDevice = device.physical_device(),
         .device = device.device(),
-        .pVulkanFunctions = static_cast<const VmaVulkanFunctions*>( &vulkan_functions ),
+        .pVulkanFunctions = nullptr,
         .instance = device.instance(),
         .vulkanApiVersion = VK_API_VERSION_1_0,
     };
+
+    VmaVulkanFunctions vulkanFunctions = {};
+    vmaImportVulkanFunctionsFromVolk(&allocator_info, &vulkanFunctions);
+    allocator_info.pVulkanFunctions = &vulkanFunctions;
 
     return vmaCreateAllocator( &allocator_info, &device.allocator_ );
 }
