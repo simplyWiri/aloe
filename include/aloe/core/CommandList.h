@@ -1,33 +1,29 @@
 #pragma once
 
-#include <aloe/core/PipelineManager.h>
-#include <aloe/core/Resources.h>
+#include <aloe/core/handles.h>
 
 #include <volk/volk.h>
 
 #include <functional>
-#include <memory>
-#include <string>
 #include <vector>
-
-#include "Resources.h"
 
 
 namespace aloe {
 
-class CommandList;
-
-// Forward declarations
-class PipelineManager;
-class ResourceManager;
+struct SimulationState {
+    // Monotonically increasing number each time `.execute()` is called on a task graph
+    uint64_t sim_index;
+    // Time since the last tick, 0 for the first tick.
+    float delta_time;
+};
 
 struct RenderingInfo {
     struct ColorAttachment {
         ImageHandle image;
         VkFormat format;
-        VkAttachmentLoadOp load_op;
-        VkAttachmentStoreOp store_op;
-        VkClearValue clear_value;
+        VkAttachmentLoadOp load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        VkAttachmentStoreOp store_op = VK_ATTACHMENT_STORE_OP_STORE;
+        VkClearValue clear_value = { .color = { 0.0f, 0.0f, 0.0f, 1.0f } };
     };
 
     std::vector<ColorAttachment> colors;
@@ -35,47 +31,45 @@ struct RenderingInfo {
     VkRect2D render_area;
 };
 
-class BoundPipelineScope {
-public:
+struct BoundPipelineScope {
     BoundPipelineScope( CommandList& cmd, PipelineManager& pipeline_manager, PipelineHandle handle );
     ~BoundPipelineScope() = default;
 
-    // Set a uniform with its usage
     template<typename T>
-    BoundPipelineScope& set_uniform( ShaderUniform<T> uniform, const T& value );
-    // Compute dispatch
+    BoundPipelineScope& set_uniform( ShaderUniform<T> uniform );
+    BoundPipelineScope& set_dynamic_state( VkDynamicState state, const void* data );
+
+    // Compute dispatch commands
     void dispatch( uint32_t x, uint32_t y, uint32_t z );
 
-private:
-    void late_bind_buffer( BufferHandle handle );
-    void late_bind_image( ImageHandle handle );
+    // Graphics draw commands
+    void
+    draw( uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0 );
+    void draw_indexed( uint32_t index_count,
+                       uint32_t instance_count = 1,
+                       uint32_t first_index = 0,
+                       int32_t vertex_offset = 0,
+                       uint32_t first_instance = 0 );
 
-    CommandList& cmd_;
-    PipelineManager& pipeline_manager_;
-    PipelineHandle pipeline_;
-    friend class CommandList;
+private:
+    CommandList& cmd;
+    PipelineManager& pipeline_manager;
+    PipelineHandle pipeline;
 };
 
-class CommandList {
-public:
+struct CommandList {
     CommandList( const char* task_name,
                  VkCommandBuffer cmd,
                  PipelineManager& pipeline_mgr,
                  ResourceManager& resource_mgr );
     ~CommandList();
 
-    // Pipeline binding returns RAII scope
+    const SimulationState& state();
+
     BoundPipelineScope bind_pipeline( PipelineHandle handle );
 
-    // Renderpass management
-    // void begin_renderpass( const RenderingInfo& info );
-    // void end_renderpass();
-private:
-    VkCommandBuffer cmd_;
-    PipelineManager& pipeline_mgr_;
-    ResourceManager& resource_mgr_;
-
-    friend class BoundPipelineScope;
+    void begin_renderpass( const RenderingInfo& info );
+    void end_renderpass();
 };
 
 }// namespace aloe

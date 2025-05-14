@@ -30,6 +30,11 @@ target_compile_options(vma PRIVATE -w) # vma does not build cleanly.
 aloe_add_library(aloe
     HEADERS
         core/CommandList.h
+<<<<<<< Updated upstream
+=======
+        core/FrameGraph.h
+        core/TaskGraph.h
+>>>>>>> Stashed changes
         core/Device.h
         core/PipelineManager.h
         core/ResourceManager.h
@@ -40,6 +45,15 @@ aloe_add_library(aloe
         core/PipelineManager.cpp
         core/ResourceManager.cpp
         core/Swapchain.cpp
+    LINK_AGAINST
+        glfw
+        vma
+        volk
+)
+
+aloe_add_library(demo
+    SOURCES
+        example.cpp
     LINK_AGAINST
         glfw
         vma

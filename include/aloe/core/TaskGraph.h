@@ -14,17 +14,10 @@ struct TaskDesc {
     std::string name;
     Queue queue_type = Graphics;
     std::vector<ResourceUsageDesc> resources;
-    // todo: `VkCommandBuffer` should be a `aloe::CommandList` once the interface exists.
-    std::function<void(VkCommandBuffer)> execute_fn;
+    std::function<void(CommandList&)> execute_fn;
 };
 
 struct TaskGraph {
-    struct Task {
-        // semaphores / barriers which should be waited on
-        std::function<void(VkCommandBuffer)> execute_fn;
-    };
-
-
     void add_task(TaskDesc&& task);
 
     // Resolves all `TaskDesc`'s into concrete passes which can be executed, implicitly creates any resources
@@ -34,16 +27,6 @@ struct TaskGraph {
 
     // Executes the task graph, runs through all of the tasks linearly, executing them one by one.
     void execute();
-
-private:
-    // todo: a way to get the current active command buffer for a given queue
-    // todo: a way to manage command pools for each queue required by a particular graph
-    // todo: a way for the frame graph to hook into this mechanism
-
-
-    // Descriptions of a task which will be executed
-    std::vector<TaskDesc> task_descs_;
-    std::vector<Task> tasks_;
 };
 
 }
