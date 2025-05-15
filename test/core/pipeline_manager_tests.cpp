@@ -25,8 +25,8 @@ protected:
         aloe::set_logger_level( aloe::LogLevel::Warn );
 
         device_ = std::make_unique<aloe::Device>( aloe::DeviceSettings{ .enable_validation = true, .headless = true } );
-        pipeline_manager_ = device_->make_pipeline_manager( { "resources" } );
         resource_manager_ = device_->make_resource_manager();
+        pipeline_manager_ = device_->make_pipeline_manager( { "resources" } );
 
         spirv_tools_.SetMessageConsumer(
             [&]( spv_message_level_t level, const char* source, const spv_position_t& position, const char* message ) {
@@ -158,14 +158,17 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
 
 #define COMPUTE_ENTRY " [shader(\"compute\")] "
 
-// Compile a simple shader from file and verify success and valid output
-TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromFile ) {
+//------------------------------------------------------------------------------
+// Basic Compilation Tests
+//------------------------------------------------------------------------------
+
+TEST_F( PipelineManagerTestFixture, Compile_SimpleShaderFromFile ) {
     const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
     const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
-TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromSource ) {
+TEST_F( PipelineManagerTestFixture, Compile_SimpleShaderFromSource ) {
     pipeline_manager_->set_virtual_file( "virtual_test.slang", COMPUTE_ENTRY "void main() { }" );
     const auto shader = aloe::ShaderCompileInfo{ .name = "virtual_test.slang", .entry_point = "main" };
 
@@ -173,9 +176,16 @@ TEST_F( PipelineManagerTestFixture, SimpleShaderCompilationFromSource ) {
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
-// Compilation should fail for an invalid shader path
-TEST_F( PipelineManagerTestFixture, SimpleShaderErrorFails ) {
-    // Syntactical error in compilation
+TEST_F( PipelineManagerTestFixture, Compile_ShaderWithDefines ) {
+    const auto shader = aloe::ShaderCompileInfo{ .name = "define_shader.slang", .entry_point = "main" };
+    pipeline_manager_->set_virtual_file( "define_shader.slang", COMPUTE_ENTRY "void main() { int x = MY_DEFINE; }" );
+    pipeline_manager_->set_define( "MY_DEFINE", "1" );
+
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
+}
+
+TEST_F( PipelineManagerTestFixture, Compile_FailsOnInvalidShader ) {
     pipeline_manager_->set_virtual_file( "virtual_test.slang", COMPUTE_ENTRY "void main(" );
     const auto shader = aloe::ShaderCompileInfo{ .name = "virtual_test.slang", .entry_point = "main" };
     const auto handle = compile_and_validate( { shader } );
@@ -185,36 +195,120 @@ TEST_F( PipelineManagerTestFixture, SimpleShaderErrorFails ) {
     EXPECT_TRUE( handle.error().find( "virtual_test.slang" ) != std::string::npos );
 }
 
-// Compiling a shader with defines should work
-TEST_F( PipelineManagerTestFixture, CompileShaderWithDefines ) {
-    const auto shader = aloe::ShaderCompileInfo{ .name = "define_shader.slang", .entry_point = "main" };
-    pipeline_manager_->set_virtual_file( "define_shader.slang", COMPUTE_ENTRY "void main() { int x = MY_DEFINE; }" );
-    pipeline_manager_->set_define( "MY_DEFINE", "1" );
+//------------------------------------------------------------------------------
+// Resource Binding and Validation Tests
+//------------------------------------------------------------------------------
 
+TEST_F( PipelineManagerTestFixture, Binding_InvalidResourceReturnsFalse ) {
+    pipeline_manager_->set_virtual_file(
+        "invalid_resource.slang",
+        make_compute_shader( "", "uniform aloe::BufferHandle buf, uniform aloe::ImageHandle img", "main", 1 ) );
+
+    const auto shader = aloe::ShaderCompileInfo{ .name = "invalid_resource.slang", .entry_point = "main" };
     const auto handle = compile_and_validate( { shader } );
     ASSERT_TRUE( handle.has_value() ) << handle.error();
+
+    // Test invalid buffer handle
+    auto buf_uniform = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *handle, "buf" );
+    const auto fake_buffer = aloe::BufferHandle( 999 );
+    EXPECT_FALSE( pipeline_manager_->set_uniform( buf_uniform.set_value( fake_buffer ),
+                                                  aloe::usage( fake_buffer, aloe::ComputeStorageRead ) ) );
+
+    // Test invalid image handle
+    auto img_uniform = pipeline_manager_->get_uniform_handle<aloe::ImageHandle>( *handle, "img" );
+    const auto fake_image = aloe::ImageHandle( 888 );
+    EXPECT_FALSE( pipeline_manager_->set_uniform( img_uniform.set_value( fake_image ),
+                                                  aloe::usage( fake_image, aloe::ComputeStorageRead ) ) );
 }
 
-// Setting a new define should trigger recompilation with different output
-TEST_F( PipelineManagerTestFixture, ShaderRecompilesWithDefine ) {
-    const auto shader = aloe::ShaderCompileInfo{ .name = "define_shader.slang", .entry_point = "main" };
-    pipeline_manager_->set_virtual_file( "define_shader.slang", COMPUTE_ENTRY "void main() { int x = MY_DEFINE; }" );
-    pipeline_manager_->set_define( "MY_DEFINE", "1" );
+TEST_F( PipelineManagerTestFixture, Binding_FreedResourceErrorsOnBind ) {
+    pipeline_manager_->set_virtual_file( "freed_resource.slang",
+                                         make_compute_shader( "", "uniform aloe::BufferHandle buf", "main", 1 ) );
+
+    const auto shader = aloe::ShaderCompileInfo{ .name = "freed_resource.slang", .entry_point = "main" };
     const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
 
-    const auto initial_version = pipeline_manager_->get_pipeline_version( *handle );
-    EXPECT_EQ( initial_version, 1 );
+    // Create and set a valid buffer
+    auto buffer = create_and_upload_buffer( "FreedBuffer", { 1.0f, 2.0f, 3.0f } );
+    auto buf_uniform = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *handle, "buf" );
+    EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( buffer ),
+                                                 aloe::usage( buffer, aloe::ComputeStorageRead ) ) );
 
-    pipeline_manager_->set_define( "MY_DEFINE", "2" );
-    const auto recompiled_version = pipeline_manager_->get_pipeline_version( *handle );
+    // Free the buffer before bind_pipeline
+    resource_manager_->free_buffer( buffer );
 
-    EXPECT_NE( initial_version, recompiled_version );
-    EXPECT_EQ( recompiled_version, initial_version + 1 );
+    // Execute should generate error but not crash
+    execute_compute_shader(
+        [&]( VkCommandBuffer cmd ) { EXPECT_FALSE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
 }
 
-// Recompiling after changing a dependent virtual file should increment version
-TEST_F( PipelineManagerTestFixture, VirtualFileDependencyWorks ) {
-    // Set up the virtual include file & a shader that dependents this file
+TEST_F( PipelineManagerTestFixture, Binding_MultipleResourcesSameSlot ) {
+    pipeline_manager_->set_virtual_file( "multi_resource.slang",
+                                         make_compute_shader( "", "uniform aloe::BufferHandle buf", "main", 1 ) );
+
+    const auto shader = aloe::ShaderCompileInfo{ .name = "multi_resource.slang", .entry_point = "main" };
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
+
+    // Create two buffers
+    auto buffer1 = create_and_upload_buffer( "Buffer1", { 1.0f, 2.0f, 3.0f } );
+    auto buffer2 = create_and_upload_buffer( "Buffer2", { 4.0f, 5.0f, 6.0f } );
+
+    auto buf_uniform = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *handle, "buf" );
+
+    // First binding should succeed
+    EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( buffer1 ),
+                                                 aloe::usage( buffer1, aloe::ComputeStorageRead ) ) );
+
+    pipeline_manager_->bind_slots();
+    resource_manager_->free_buffer( buffer1 );
+
+    // Second binding to same slot should succeed and replace first binding
+    EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( buffer2 ),
+                                                 aloe::usage( buffer2, aloe::ComputeStorageRead ) ) );
+}
+
+TEST_F( PipelineManagerTestFixture, Binding_ResourceVersionValidation ) {
+    pipeline_manager_->set_virtual_file( "version_test.slang",
+                                         make_compute_shader( "", "uniform aloe::BufferHandle buf", "main", 1 ) );
+
+    const auto shader = aloe::ShaderCompileInfo{ .name = "version_test.slang", .entry_point = "main" };
+    const auto handle = compile_and_validate( { shader } );
+    ASSERT_TRUE( handle.has_value() ) << handle.error();
+
+    // Create initial buffer and bind it
+    auto buffer = create_and_upload_buffer( "VersionBuffer", { 1.0f, 2.0f, 3.0f } );
+    auto buf_uniform = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *handle, "buf" );
+    EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( buffer ),
+                                                 aloe::usage( buffer, aloe::ComputeStorageRead ) ) );
+    pipeline_manager_->bind_slots();
+
+    // Free the buffer
+    resource_manager_->free_buffer( buffer );
+
+    // Create a new buffer - it might get the same ID but should have a different version
+    auto new_buffer = create_and_upload_buffer( "NewVersionBuffer", { 4.0f, 5.0f, 6.0f } );
+
+    // Execute should fail or generate error about invalid resource version
+    execute_compute_shader(
+        [&]( VkCommandBuffer cmd ) { EXPECT_FALSE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
+
+    // Binding the new buffer should succeed
+    EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( new_buffer ),
+                                                 aloe::usage( new_buffer, aloe::ComputeStorageRead ) ) );
+
+    pipeline_manager_->bind_slots();
+
+    execute_compute_shader(
+        [&]( VkCommandBuffer cmd ) { EXPECT_TRUE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
+}
+
+//------------------------------------------------------------------------------
+// Dependency Tracking Tests
+//------------------------------------------------------------------------------
+
+TEST_F( PipelineManagerTestFixture, Dependency_VirtualFileBasic ) {
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang",
@@ -225,8 +319,7 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyWorks ) {
     ASSERT_TRUE( handle.has_value() ) << handle.error();
 }
 
-TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation ) {
-    // Set up the virtual include file & a shader that dependents this file
+TEST_F( PipelineManagerTestFixture, Dependency_VirtualFileTriggersRecompile ) {
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang",
@@ -239,7 +332,6 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation )
     uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( baseline_version, 1 );
 
-    // Modify the shared include, this should automatically result in the pipeline being recompiled immediately
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 8 + a + b; }" );
 
@@ -249,9 +341,7 @@ TEST_F( PipelineManagerTestFixture, VirtualFileDependencyTriggersRecompilation )
     EXPECT_EQ( next_version, baseline_version + 1 );
 }
 
-// Changing an unrelated virtual file should not trigger recompilation
-TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerUpdate ) {
-    // Set up the virtual include file & a shader that dependents this file
+TEST_F( PipelineManagerTestFixture, Dependency_UnrelatedFileNoRecompile ) {
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 5 + a + b; }" );
     pipeline_manager_->set_virtual_file( "main_shader.slang", COMPUTE_ENTRY "void main() { int x = 5; }" );
@@ -263,8 +353,6 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
     uint64_t baseline_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( baseline_version, 1 );
 
-    // Modify the shared include, this should not result in the pipeline being recompiled - because `main_shader.slang`
-    // does not depend on `test` at all.
     pipeline_manager_->set_virtual_file( "test.slang",
                                          "module test; public int add(int a, int b) { return 8 + a + b; }" );
 
@@ -272,9 +360,7 @@ TEST_F( PipelineManagerTestFixture, UnrelatedVirtualFileDependencyDoesntTriggerU
     EXPECT_EQ( baseline_version, next_version );
 }
 
-// Updating a dependent file causes the pipeline to automatically recompile
-TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
-    // Set up shader module graph: `main` depends on `mid`
+TEST_F( PipelineManagerTestFixture, Dependency_UpdateRecompilesShader ) {
     pipeline_manager_->set_virtual_file( "mid.slang", "module mid; public int square(int x) { return x * x; }" );
     pipeline_manager_->set_virtual_file( "main.slang",
                                          "import mid;" COMPUTE_ENTRY "void main() { int x = square(4); }" );
@@ -292,9 +378,7 @@ TEST_F( PipelineManagerTestFixture, DependencyUpdateRecompilesFinalShader ) {
     EXPECT_EQ( new_version, baseline_version + 1 );
 }
 
-// Changing a transitive dependency should recompile all dependents
-TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalShader ) {
-    // main -> mid -> common
+TEST_F( PipelineManagerTestFixture, Dependency_TransitiveUpdateRecompiles ) {
     pipeline_manager_->set_virtual_file( "common.slang",
                                          "module common; public int add(int a, int b) { return a + b; }" );
     pipeline_manager_->set_virtual_file(
@@ -310,7 +394,6 @@ TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalSha
     const uint64_t initial_version = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( initial_version, 1 );
 
-    // Modify the transitive dependency: common.slang
     pipeline_manager_->set_virtual_file( "common.slang",
                                          "module common; public int add(int a, int b) { return 1 + a + b; }" );
 
@@ -318,8 +401,7 @@ TEST_F( PipelineManagerTestFixture, TransitiveDependencyUpdateRecompilesFinalSha
     EXPECT_EQ( new_version, initial_version + 1 );
 }
 
-// A diamond dependency graph should trigger only one recompilation of the top-level shader
-TEST_F( PipelineManagerTestFixture, DiamondDependencyRecompilesOnce ) {
+TEST_F( PipelineManagerTestFixture, Dependency_DiamondDependencyRecompilesOnce ) {
     /*
         Dependency graph:
              main.slang (A)
@@ -344,91 +426,17 @@ TEST_F( PipelineManagerTestFixture, DiamondDependencyRecompilesOnce ) {
     const uint64_t version_before = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( version_before, 1 );
 
-    // Modify shared leaf dependency
     pipeline_manager_->set_virtual_file( "shared_dep.slang", "module shared_dep; public int val() { return 1337; }" );
 
     const uint64_t version_after = pipeline_manager_->get_pipeline_version( *handle );
     EXPECT_EQ( version_after, version_before + 1 );
 }
 
-// Compiling the same shader with different entry points should produce different pipeline handles
-TEST_F( PipelineManagerTestFixture, MultipleEntryPointsProduceDifferentPipelines ) {
-    pipeline_manager_->set_virtual_file( "multi_entry.slang",
-                                         COMPUTE_ENTRY "void main1() { int a = 1; }" COMPUTE_ENTRY
-                                                       "void main2() { int b = 2; }" );
+//------------------------------------------------------------------------------
+// Uniform Block Tests
+//------------------------------------------------------------------------------
 
-    const aloe::ShaderCompileInfo shader1{ .name = "multi_entry.slang", .entry_point = "main1" };
-    const aloe::ShaderCompileInfo shader2{ .name = "multi_entry.slang", .entry_point = "main2" };
-
-    const auto handle1 = compile_and_validate( { shader1 } );
-    const auto handle2 = compile_and_validate( { shader2 } );
-
-    ASSERT_TRUE( handle1.has_value() ) << handle1.error();
-    ASSERT_TRUE( handle2.has_value() ) << handle2.error();
-
-    // They should be different handles
-    EXPECT_NE( handle1->id, handle2->id );
-
-    // Validate both SPIR-V blobs
-    const auto first_spirv = pipeline_manager_->get_pipeline_spirv( *handle1 );
-    const auto second_spirv = pipeline_manager_->get_pipeline_spirv( *handle2 );
-
-    EXPECT_TRUE( spirv_tools_.Validate( first_spirv ) );
-    EXPECT_TRUE( spirv_tools_.Validate( second_spirv ) );
-
-    EXPECT_NE( first_spirv, second_spirv );
-}
-
-// Modifying a shared include should cause all entry points that depend on it to be recompiled
-TEST_F( PipelineManagerTestFixture, SharedIncludeRecompilesAllEntryPoints ) {
-    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; public int val() { return 1; }" );
-
-    pipeline_manager_->set_virtual_file( "multi_entry.slang",
-                                         "import shared;" COMPUTE_ENTRY "void main1() { int a = val(); }" COMPUTE_ENTRY
-                                         "void main2() { int b = val(); }" );
-
-    const aloe::ShaderCompileInfo shader1{ .name = "multi_entry.slang", .entry_point = "main1" };
-    const aloe::ShaderCompileInfo shader2{ .name = "multi_entry.slang", .entry_point = "main2" };
-
-    const auto handle1 = compile_and_validate( { shader1 } );
-    const auto handle2 = compile_and_validate( { shader2 } );
-
-    ASSERT_TRUE( handle1.has_value() ) << handle1.error();
-    ASSERT_TRUE( handle2.has_value() ) << handle2.error();
-
-    const uint64_t version1_before = pipeline_manager_->get_pipeline_version( *handle1 );
-    const uint64_t version2_before = pipeline_manager_->get_pipeline_version( *handle2 );
-    EXPECT_EQ( version1_before, 1 );
-    EXPECT_EQ( version2_before, 1 );
-
-    // Modify the shared include
-    pipeline_manager_->set_virtual_file( "shared.slang", "module shared; public int val() { return 999; }" );
-
-    const uint64_t version1_after = pipeline_manager_->get_pipeline_version( *handle1 );
-    const uint64_t version2_after = pipeline_manager_->get_pipeline_version( *handle2 );
-
-    EXPECT_EQ( version1_after, version1_before + 1 );
-    EXPECT_EQ( version2_after, version2_before + 1 );
-}
-
-// Circular virtual file dependency should be detected
-// Circular virtual file dependencies should not cause infinite loops or crashes during compilation
-TEST_F( PipelineManagerTestFixture, CircularIncludesHandledGracefully ) {
-    pipeline_manager_->set_virtual_file( "a.slang", "import b;" COMPUTE_ENTRY "void main() { }" );
-    pipeline_manager_->set_virtual_file( "b.slang", "import c;" );
-    pipeline_manager_->set_virtual_file( "c.slang", "import a;" );// Circular: a -> b -> c -> a
-
-    const aloe::ShaderCompileInfo shader{ .name = "a.slang", .entry_point = "main" };
-    const auto handle = compile_and_validate( { shader } );
-
-    ASSERT_FALSE( handle.has_value() );
-    EXPECT_TRUE( handle.error().find( "circular" ) != std::string::npos ||
-                 handle.error().find( "cycle" ) != std::string::npos ||
-                 handle.error().find( "import" ) != std::string::npos );
-}
-
-
-TEST_F( PipelineManagerTestFixture, UniformBlockBasicCompute ) {
+TEST_F( PipelineManagerTestFixture, Uniform_BasicCompute ) {
     pipeline_manager_->set_virtual_file(
         "basic_uniform.slang",
         make_compute_shader(
@@ -450,27 +458,26 @@ TEST_F( PipelineManagerTestFixture, UniformBlockBasicCompute ) {
     auto h_frame = pipeline_manager_->get_uniform_handle<int>( *pipeline_handle, "frameCount" );
     auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "UniformOut", { 0.0f, 0.0f } );
-    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    // --- Set Uniforms ---
-    pipeline_manager_->set_uniform( *pipeline_handle, h_time.set_value( 123.45f ) );
-    pipeline_manager_->set_uniform( *pipeline_handle, h_frame.set_value( 99 ) );
-    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
+    pipeline_manager_->set_uniform( h_time.set_value( 123.45f ) );
+    pipeline_manager_->set_uniform( h_frame.set_value( 99 ) );
+    EXPECT_TRUE( pipeline_manager_->set_uniform( h_outbuf.set_value( outbuf ),
+                                                 aloe::usage( outbuf, aloe::ComputeStorageWrite ) ) );
 
-    // --- Dispatch ---
+    pipeline_manager_->bind_slots();
+
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
     } );
 
-    // --- Verify ---
     std::vector<uint32_t> result_data( 2 );
     resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) * 2 );
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 123.45f );
     EXPECT_EQ( result_data[1], 99u );
 }
 
-TEST_F( PipelineManagerTestFixture, UniformBlockStruct ) {
+TEST_F( PipelineManagerTestFixture, Uniform_StructType ) {
     struct MyParams {
         float intensity;
         int mode;
@@ -492,27 +499,24 @@ TEST_F( PipelineManagerTestFixture, UniformBlockStruct ) {
     auto h_params = pipeline_manager_->get_uniform_handle<MyParams>( *pipeline_handle, "params" );
     auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "StructUniformOut", { 0.0f, 0.0f } );
-    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    // --- Set Uniforms ---
     MyParams test_params = { 0.75f, 2 };
-    pipeline_manager_->set_uniform( *pipeline_handle, h_params.set_value( test_params ) );
-    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
+    pipeline_manager_->set_uniform( h_params.set_value( test_params ) );
+    pipeline_manager_->set_uniform( h_outbuf.set_value( outbuf ), aloe::usage( outbuf, aloe::ComputeStorageWrite ) );
+    pipeline_manager_->bind_slots();
 
-    // --- Dispatch ---
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
     } );
 
-    // --- Verify ---
     std::vector<uint32_t> result_data( 2 );
     resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) * 2 );
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 0.75f );
     EXPECT_EQ( result_data[1], 2u );
 }
 
-TEST_F( PipelineManagerTestFixture, UniformPersistenceAcrossDispatches ) {
+TEST_F( PipelineManagerTestFixture, Uniform_PersistenceAcrossDispatches ) {
     pipeline_manager_->set_virtual_file( "persist_uniform.slang",
                                          make_compute_shader(
                                              R"(
@@ -528,21 +532,21 @@ TEST_F( PipelineManagerTestFixture, UniformPersistenceAcrossDispatches ) {
     auto h_myval = pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, "myval" );
     auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "PersistUniformOut", { 0.0f } );
-    pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
-    // --- First dispatch ---
-    pipeline_manager_->set_uniform( *pipeline_handle, h_myval.set_value( 1.5f ) );
-    pipeline_manager_->set_uniform( *pipeline_handle, h_outbuf.set_value( outbuf ) );
+    pipeline_manager_->set_uniform( h_myval.set_value( 1.5f ) );
+    pipeline_manager_->set_uniform( h_outbuf.set_value( outbuf ), aloe::usage( outbuf, aloe::ComputeStorageWrite ) );
+    pipeline_manager_->bind_slots();
+
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
     } );
+
     std::vector<uint32_t> result_data( 1 );
     resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) );
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 1.5f );
 
-    // --- Second dispatch ---
-    pipeline_manager_->set_uniform( *pipeline_handle, h_myval.set_value( 7.25f ) );
+    pipeline_manager_->set_uniform( h_myval.set_value( 7.25f ) );
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
         vkCmdDispatch( cmd, 1, 1, 1 );
@@ -551,37 +555,211 @@ TEST_F( PipelineManagerTestFixture, UniformPersistenceAcrossDispatches ) {
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 7.25f );
 }
 
-// Compile a simple shader from file and verify success and valid output
-TEST_F( PipelineManagerTestFixture, SimpleBufferBindingWorks ) {
-    // Compile the test shader, ensure it is valid.
-    const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
-    const auto handle = compile_and_validate( { shader } );
-    ASSERT_TRUE( handle.has_value() ) << handle.error();
-
-    // Allocate a buffer
-    const auto buffer = resource_manager_->create_buffer( {
-        .size = sizeof( float ) * 128,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .name = "Test Buffer",
-    } );
-
-    const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
-    EXPECT_EQ( result, VK_SUCCESS );
+TEST_F( PipelineManagerTestFixture, Uniform_AliasedTypesAtSameOffset ) {
+    pipeline_manager_->set_virtual_file( "aliased_uniform.slang",
+                                         R"(
+        [shader("vertex")]
+        void vertex_main(uniform float param_one) { }
+        [shader("fragment")]
+        void fragment_main(uniform int param_one) { }
+        )" );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "aliased_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "aliased_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline( pipeline_info );
+    ASSERT_FALSE( pipeline_handle.has_value() );
+    EXPECT_TRUE( pipeline_handle.error().find( "param_one" ) != std::string::npos ||
+                 pipeline_handle.error().find( "float" ) != std::string::npos ||
+                 pipeline_handle.error().find( "int" ) != std::string::npos );
 }
 
-TEST_F( PipelineManagerTestFixture, InvalidBufferBindingFailsGracefully ) {
-    // Compile the test shader, ensure it is valid.
-    const auto shader = aloe::ShaderCompileInfo{ .name = "test.slang", .entry_point = "main" };
-    const auto handle = compile_and_validate( { shader } );
-    ASSERT_TRUE( handle.has_value() ) << handle.error();
-
-    // Allocate a fake buffer, which does not exist.
-    const auto buffer = aloe::BufferHandle( 1, 5, 23 );
-    const auto result = pipeline_manager_->bind_buffer( *resource_manager_, buffer );
-    EXPECT_NE( result, VK_SUCCESS );
+TEST_F( PipelineManagerTestFixture, Uniform_OverlappingRangesDifferentNames ) {
+    pipeline_manager_->set_virtual_file( "overlap_uniform.slang",
+                                         R"(
+        [shader("vertex")]
+        void vertex_main(uniform float foo) { }
+        [shader("fragment")]
+        void fragment_main(uniform float bar) { }
+        )" );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline( pipeline_info );
+    ASSERT_FALSE( pipeline_handle.has_value() );
+    EXPECT_TRUE( pipeline_handle.error().find( "overlap" ) != std::string::npos ||
+                 pipeline_handle.error().find( "conflict" ) != std::string::npos );
 }
 
-// E2E Tests execute compute shaders on the GPU to verify behaviour.
+TEST_F( PipelineManagerTestFixture, Uniform_SupersetRange ) {
+    pipeline_manager_->set_virtual_file( "overlap_uniform.slang",
+                                         R"(
+        [shader("vertex")]
+        void vertex_main(uniform float foo) { }
+        [shader("fragment")]
+        void fragment_main(uniform float foo, uniform float frag_only) { }
+        )" );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline( pipeline_info );
+    ASSERT_TRUE( pipeline_handle.has_value() );
+}
+
+//------------------------------------------------------------------------------
+// Multi-Entry Point and File Organization Tests
+//------------------------------------------------------------------------------
+
+TEST_F( PipelineManagerTestFixture, MultiEntry_SingleFile ) {
+    pipeline_manager_->set_virtual_file( "multi_entry.slang",
+                                         R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+
+        [shader("vertex")]
+        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(1, 0, 0, 1);
+            return output;
+        }
+
+        [shader("fragment")]
+        float4 fragment_main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )" );
+
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "multi_entry.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "multi_entry.slang", .entry_point = "fragment_main" }
+    };
+
+    const auto handle = pipeline_manager_->compile_pipeline( pipeline_info );
+    ASSERT_TRUE( handle ) << handle.error();
+
+    const auto initial_version = pipeline_manager_->get_pipeline_version( *handle );
+
+    pipeline_manager_->set_virtual_file( "multi_entry.slang",
+                                         R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+
+        [shader("vertex")]
+        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(0, 1, 0, 1);
+            return output;
+        }
+
+        [shader("fragment")]
+        float4 fragment_main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )" );
+
+    const auto updated_version = pipeline_manager_->get_pipeline_version( *handle );
+    EXPECT_GT( updated_version, initial_version );
+}
+
+TEST_F( PipelineManagerTestFixture, MultiEntry_SeparateFilesSharedDependency ) {
+    pipeline_manager_->set_virtual_file( "shared.slang",
+                                         R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+        )" );
+
+    pipeline_manager_->set_virtual_file( "vertex.slang",
+                                         R"(
+        #include "shared.slang"
+
+        [shader("vertex")]
+        VertexOutput main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(1, 0, 0, 1);
+            return output;
+        }
+        )" );
+
+    pipeline_manager_->set_virtual_file( "fragment.slang",
+                                         R"(
+        #include "shared.slang"
+
+        [shader("fragment")]
+        float4 main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )" );
+
+    aloe::GraphicsPipelineInfo pipeline_info{ .vertex_shader = { .name = "vertex.slang", .entry_point = "main" },
+                                              .fragment_shader = { .name = "fragment.slang", .entry_point = "main" } };
+
+    const auto handle = pipeline_manager_->compile_pipeline( pipeline_info );
+    ASSERT_TRUE( handle ) << handle.error();
+
+    const auto initial_version = pipeline_manager_->get_pipeline_version( *handle );
+
+    pipeline_manager_->set_virtual_file( "shared.slang",
+                                         R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+            float2 uv : TEXCOORD;
+        };
+        )" );
+
+    const auto updated_version = pipeline_manager_->get_pipeline_version( *handle );
+    EXPECT_GT( updated_version, initial_version );
+}
+
+TEST_F( PipelineManagerTestFixture, MultiEntry_DifferentPipelineHandles ) {
+    pipeline_manager_->set_virtual_file( "multi_entry.slang",
+                                         COMPUTE_ENTRY "void main1() { int a = 1; }" COMPUTE_ENTRY
+                                                       "void main2() { int b = 2; }" );
+
+    const aloe::ShaderCompileInfo shader1{ .name = "multi_entry.slang", .entry_point = "main1" };
+    const aloe::ShaderCompileInfo shader2{ .name = "multi_entry.slang", .entry_point = "main2" };
+
+    const auto handle1 = compile_and_validate( { shader1 } );
+    const auto handle2 = compile_and_validate( { shader2 } );
+
+    ASSERT_TRUE( handle1.has_value() ) << handle1.error();
+    ASSERT_TRUE( handle2.has_value() ) << handle2.error();
+
+    EXPECT_NE( handle1->id, handle2->id );
+
+    const auto first_spirv = pipeline_manager_->get_pipeline_spirv( *handle1 );
+    const auto second_spirv = pipeline_manager_->get_pipeline_spirv( *handle2 );
+
+    EXPECT_TRUE( spirv_tools_.Validate( first_spirv ) );
+    EXPECT_TRUE( spirv_tools_.Validate( second_spirv ) );
+
+    EXPECT_NE( first_spirv, second_spirv );
+}
+
+//------------------------------------------------------------------------------
+// End-to-End Tests
+//------------------------------------------------------------------------------
+
 TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
     constexpr size_t num_elements = 64;
     constexpr VkDeviceSize buffer_size = num_elements * sizeof( float );
@@ -593,7 +771,6 @@ TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
     for ( float& val : expected_data ) { val *= 2.0f; }
 
     auto buffer_handle = create_and_upload_buffer( "DataModificationBuffer", initial_data );
-    pipeline_manager_->bind_buffer( *resource_manager_, buffer_handle );
 
     std::string shader_body = R"(
         RWByteAddressBuffer buf = data_buffer.get();
@@ -614,7 +791,9 @@ TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
 
     auto h_data_buffer = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "data_buffer" );
 
-    pipeline_manager_->set_uniform( pipeline_handle, h_data_buffer.set_value( buffer_handle ) );
+    pipeline_manager_->set_uniform( h_data_buffer.set_value( buffer_handle ),
+                                    aloe::usage( buffer_handle, aloe::ComputeSampledRead ) );
+    pipeline_manager_->bind_slots();
 
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
@@ -646,10 +825,6 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     auto buffer2 = create_and_upload_buffer( "InputBuffer2", input_data_2 );
     auto buffer3 = create_and_upload_buffer( "OutputBuffer", std::vector<float>( num_elements ) );
 
-    pipeline_manager_->bind_buffer( *resource_manager_, buffer1 );
-    pipeline_manager_->bind_buffer( *resource_manager_, buffer2 );
-    pipeline_manager_->bind_buffer( *resource_manager_, buffer3 );
-
     std::string shader_body = R"(
         RWByteAddressBuffer buffer1 = buffer1_handle.get();
         RWByteAddressBuffer buffer2 = buffer2_handle.get();
@@ -677,9 +852,15 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     auto h_buffer2 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "buffer2_handle" );
     auto h_buffer3 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "buffer3_handle" );
 
-    pipeline_manager_->set_uniform( pipeline_handle, h_buffer1.set_value( buffer1 ) );
-    pipeline_manager_->set_uniform( pipeline_handle, h_buffer2.set_value( buffer2 ) );
-    pipeline_manager_->set_uniform( pipeline_handle, h_buffer3.set_value( buffer3 ) );
+    const auto read_1 = aloe::usage( buffer1, aloe::ComputeStorageRead );
+    const auto read_2 = aloe::usage( buffer2, aloe::ComputeStorageRead );
+    const auto write_1 = aloe::usage( buffer3, aloe::ComputeStorageWrite );
+
+    ASSERT_TRUE( pipeline_manager_->set_uniform( h_buffer1.set_value( buffer1 ), read_1 ) );
+    ASSERT_TRUE( pipeline_manager_->set_uniform( h_buffer2.set_value( buffer2 ), read_2 ) );
+    ASSERT_TRUE( pipeline_manager_->set_uniform( h_buffer3.set_value( buffer3 ), write_1 ) );
+
+    pipeline_manager_->bind_slots();
 
     execute_compute_shader( [&]( VkCommandBuffer cmd ) {
         pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
@@ -697,206 +878,99 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     }
 }
 
-TEST_F(PipelineManagerTestFixture, UniformBlockAliasedTypesAtSameOffset) {
+TEST_F( PipelineManagerTestFixture, E2E_ImageProcedural ) {
+    constexpr uint32_t image_size = 8;
+    constexpr uint32_t total_pixels = image_size * image_size;
+    constexpr uint32_t grid_size = 2;
+
+    auto image = resource_manager_->create_image( {
+        .extent = { image_size, image_size, 1 },
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .tiling = VK_IMAGE_TILING_LINEAR,
+        .name = "GridPatternImage",
+    } );
+
+    std::string shader_body = R"(
+        RWTexture2D<float4> output_tex = output_image.get();
+
+        bool is_white = ((id.x / 2 + id.y / 2) % 2) == 0;
+        float4 color = is_white ? float4(1.0, 1.0, 1.0, 1.0)
+                                : float4(0.0, 0.0, 0.0, 1.0);
+
+        output_tex[id.xy] = color;
+    )";
+
     pipeline_manager_->set_virtual_file(
-        "aliased_uniform.slang",
-        R"(
-        // Both uniforms at offset 0, different types, same name
-        [shader("vertex")]
-        void vertex_main(uniform float param_one) { }
-        [shader("fragment")]
-        void fragment_main(uniform int param_one) { }
-        )"
-    );
-    aloe::GraphicsPipelineInfo pipeline_info{
-        .vertex_shader = { .name = "aliased_uniform.slang", .entry_point = "vertex_main" },
-        .fragment_shader = { .name = "aliased_uniform.slang", .entry_point = "fragment_main" }
-    };
-    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
-    ASSERT_FALSE(pipeline_handle.has_value());
-    EXPECT_TRUE(pipeline_handle.error().find("param_one") != std::string::npos ||
-                pipeline_handle.error().find("float") != std::string::npos ||
-                pipeline_handle.error().find("int") != std::string::npos);
+        "grid_pattern.slang",
+        make_compute_shader( shader_body, "uniform aloe::ImageHandle output_image", "compute_main", image_size ) );
+
+    const aloe::ShaderCompileInfo shader_info{ .name = "grid_pattern.slang", .entry_point = "compute_main" };
+    auto pipeline_handle_result = compile_and_validate( { shader_info } );
+    ASSERT_TRUE( pipeline_handle_result.has_value() ) << pipeline_handle_result.error();
+    aloe::PipelineHandle pipeline_handle = *pipeline_handle_result;
+
+    auto uni_output_image = pipeline_manager_->get_uniform_handle<aloe::ImageHandle>( pipeline_handle, "output_image" );
+    pipeline_manager_->set_uniform( uni_output_image.set_value( image ),
+                                    aloe::usage( image, aloe::ComputeStorageWrite ) );
+    pipeline_manager_->bind_slots();
+
+    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+        VkImageMemoryBarrier2KHR barrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2_KHR,
+                                          .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                                          .srcAccessMask = VK_ACCESS_2_NONE,
+                                          .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                          .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                          .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                          .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .image = resource_manager_->get_image( image ),
+                                          .subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                                .baseMipLevel = 0,
+                                                                .levelCount = 1,
+                                                                .baseArrayLayer = 0,
+                                                                .layerCount = 1 } };
+
+        VkDependencyInfo dependency_info{ .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                          .imageMemoryBarrierCount = 1,
+                                          .pImageMemoryBarriers = &barrier };
+
+        vkCmdPipelineBarrier2KHR( cmd, &dependency_info );
+
+        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
+        vkCmdDispatch( cmd, 1, image_size, 1 );
+
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        vkCmdPipelineBarrier2KHR( cmd, &dependency_info );
+    } );
+
+    std::vector<float> readback_data( total_pixels * 4 );
+    VkDeviceSize read_bytes =
+        resource_manager_->read_from_image( image, readback_data.data(), readback_data.size() * sizeof( float ) );
+    ASSERT_EQ( read_bytes, readback_data.size() * sizeof( float ) );
+
+    for ( uint32_t y = 0; y < image_size; y++ ) {
+        for ( uint32_t x = 0; x < image_size; x++ ) {
+            uint32_t pixel_idx = ( y * image_size + x ) * 4;
+
+            bool should_be_white = ( ( x / grid_size + y / grid_size ) % 2 ) == 0;
+            float expected = should_be_white ? 1.0f : 0.0f;
+
+            EXPECT_FLOAT_EQ( readback_data[pixel_idx + 0], expected )
+                << "Mismatch at pixel (" << x << "," << y << ") red component";
+            EXPECT_FLOAT_EQ( readback_data[pixel_idx + 1], expected )
+                << "Mismatch at pixel (" << x << "," << y << ") green component";
+            EXPECT_FLOAT_EQ( readback_data[pixel_idx + 2], expected )
+                << "Mismatch at pixel (" << x << "," << y << ") blue component";
+            EXPECT_FLOAT_EQ( readback_data[pixel_idx + 3], 1.0f )
+                << "Mismatch at pixel (" << x << "," << y << ") alpha component";
+        }
+    }
 }
-
-TEST_F(PipelineManagerTestFixture, UniformBlockOverlappingRangesDifferentNames) {
-    pipeline_manager_->set_virtual_file(
-        "overlap_uniform.slang",
-        R"(
-        // Both uniforms at offset 0, different names, same types
-        [shader("vertex")]
-        void vertex_main(uniform float foo) { }
-        [shader("fragment")]
-        void fragment_main(uniform float bar) { }
-        )"
-    );
-    aloe::GraphicsPipelineInfo pipeline_info{
-        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
-        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
-    };
-    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
-    ASSERT_FALSE(pipeline_handle.has_value());
-    EXPECT_TRUE(pipeline_handle.error().find("overlap") != std::string::npos ||
-                pipeline_handle.error().find("conflict") != std::string::npos);
-}
-
-TEST_F(PipelineManagerTestFixture, UniformBlockSupersetRange) {
-    pipeline_manager_->set_virtual_file(
-        "overlap_uniform.slang",
-        R"(
-        [shader("vertex")]
-        void vertex_main(uniform float foo) { }
-        [shader("fragment")]
-        void fragment_main(uniform float foo, uniform float frag_only) { }
-        )"
-    );
-    aloe::GraphicsPipelineInfo pipeline_info{
-        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
-        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
-    };
-    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
-    ASSERT_TRUE(pipeline_handle.has_value());
-}
-
-
-TEST_F(PipelineManagerTestFixture, MultipleEntryPointsSingleFile) {
-    pipeline_manager_->set_virtual_file(
-        "multi_entry.slang",
-        R"(
-        struct VertexOutput {
-            float4 position : SV_Position;
-            float4 color : COLOR;
-        };
-
-        [shader("vertex")]
-        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
-            VertexOutput output;
-            const float2 positions[] = {
-                float2(-1, -1), float2(3, -1), float2(-1, 3)
-            };
-            output.position = float4(positions[vertex_id], 0, 1);
-            output.color = float4(1, 0, 0, 1);
-            return output;
-        }
-
-        [shader("fragment")]
-        float4 fragment_main(VertexOutput input) : SV_Target {
-            return input.color;
-        }
-        )"
-    );
-
-    aloe::GraphicsPipelineInfo pipeline_info{
-        .vertex_shader = { .name = "multi_entry.slang", .entry_point = "vertex_main" },
-        .fragment_shader = { .name = "multi_entry.slang", .entry_point = "fragment_main" }
-    };
-
-    const auto handle = pipeline_manager_->compile_pipeline(pipeline_info);
-    ASSERT_TRUE(handle) << handle.error();
-
-    // Store initial versions
-    const auto initial_version = pipeline_manager_->get_pipeline_version(*handle);
-
-    // Modify the shader and verify versions are updated
-    pipeline_manager_->set_virtual_file(
-        "multi_entry.slang",
-        R"(
-        struct VertexOutput {
-            float4 position : SV_Position;
-            float4 color : COLOR;
-        };
-
-        [shader("vertex")]
-        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
-            VertexOutput output;
-            const float2 positions[] = {
-                float2(-1, -1), float2(3, -1), float2(-1, 3)
-            };
-            output.position = float4(positions[vertex_id], 0, 1);
-            output.color = float4(0, 1, 0, 1);  // Changed from red to green
-            return output;
-        }
-
-        [shader("fragment")]
-        float4 fragment_main(VertexOutput input) : SV_Target {
-            return input.color;
-        }
-        )"
-    );
-
-    const auto updated_version = pipeline_manager_->get_pipeline_version(*handle);
-    EXPECT_GT(updated_version, initial_version);
-}
-
-TEST_F(PipelineManagerTestFixture, SeparateFilesWithSharedDependency) {
-    // First create a shared header file
-    pipeline_manager_->set_virtual_file(
-        "shared.slang",
-        R"(
-        struct VertexOutput {
-            float4 position : SV_Position;
-            float4 color : COLOR;
-        };
-        )"
-    );
-
-    // Create vertex shader
-    pipeline_manager_->set_virtual_file(
-        "vertex.slang",
-        R"(
-        #include "shared.slang"
-
-        [shader("vertex")]
-        VertexOutput main(uint vertex_id : SV_VertexID) {
-            VertexOutput output;
-            const float2 positions[] = {
-                float2(-1, -1), float2(3, -1), float2(-1, 3)
-            };
-            output.position = float4(positions[vertex_id], 0, 1);
-            output.color = float4(1, 0, 0, 1);
-            return output;
-        }
-        )"
-    );
-
-    // Create fragment shader
-    pipeline_manager_->set_virtual_file(
-        "fragment.slang",
-        R"(
-        #include "shared.slang"
-
-        [shader("fragment")]
-        float4 main(VertexOutput input) : SV_Target {
-            return input.color;
-        }
-        )"
-    );
-
-    aloe::GraphicsPipelineInfo pipeline_info{
-        .vertex_shader = { .name = "vertex.slang", .entry_point = "main" },
-        .fragment_shader = { .name = "fragment.slang", .entry_point = "main" }
-    };
-
-    const auto handle = pipeline_manager_->compile_pipeline(pipeline_info);
-    ASSERT_TRUE(handle) << handle.error();
-
-    // Store initial versions
-    const auto initial_version = pipeline_manager_->get_pipeline_version(*handle);
-
-    // Modify the shared header and verify both shaders are recompiled
-    pipeline_manager_->set_virtual_file(
-        "shared.slang",
-        R"(
-        struct VertexOutput {
-            float4 position : SV_Position;
-            float4 color : COLOR;
-            float2 uv : TEXCOORD;  // Added new field
-        };
-        )"
-    );
-
-    const auto updated_version = pipeline_manager_->get_pipeline_version(*handle);
-    EXPECT_GT(updated_version, initial_version);
-}
-
-

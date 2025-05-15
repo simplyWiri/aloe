@@ -128,8 +128,22 @@ bool PipelineManager::PipelineState::matches_shader( const ShaderState& shader )
         info );
 }
 
-PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_paths )
+void PipelineManager::PipelineState::remove_resource( uint32_t resource_id ) {
+    if ( resource_id == 0 ) return;
+
+    const auto iter = std::ranges::find_if( bound_resources, [&]( auto& u ) {
+        return std::visit( [&]( const auto& resource ) { return resource.raw == resource_id; }, u.resource );
+    } );
+
+    assert( iter != bound_resources.end() );
+    bound_resources.erase( iter );
+}
+
+PipelineManager::PipelineManager( Device& device,
+                                  ResourceManager& resource_manager,
+                                  std::vector<std::string> root_paths )
     : device_( device )
+    , resource_manager_( resource_manager )
     , root_paths_( std::move( root_paths ) ) {
     if ( SLANG_FAILED( slang::createGlobalSession( global_session_.writeRef() ) ) ) {
         throw std::runtime_error( "Failed to create Slang global session." );
@@ -245,8 +259,12 @@ const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle
     return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
 }
 
-void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const {
+bool PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const {
     const auto& pipeline = pipelines_.at( handle.id );
+
+    for ( const auto& res : pipeline.bound_resources ) {
+        if ( !resource_manager_.validate_access( res ) ) { return false; }
+    }
 
     vkCmdBindDescriptorSets( buffer,
                              VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -264,36 +282,12 @@ void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buff
                         pipeline.uniforms->size(),
                         pipeline.uniforms->data() );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline );
+
+    return true;
 }
 
-VkResult PipelineManager::bind_buffer( ResourceManager& resource_manager,
-                                       BufferHandle buffer_handle,
-                                       VkDeviceSize offset,
-                                       VkDeviceSize range ) const {
-    const auto buffer = resource_manager.get_buffer( buffer_handle );
-    if ( buffer == VK_NULL_HANDLE ) {
-        log_write( LogLevel::Error, "Failed to find buffer {} for binding", buffer_handle.id() );
-        return VK_ERROR_UNKNOWN;
-    }
-
-    const VkDescriptorBufferInfo buffer_info = {
-        .buffer = buffer,
-        .offset = offset,
-        .range = range,
-    };
-
-    const VkWriteDescriptorSet write_set{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = global_descriptor_set_,
-        .dstBinding = get_binding_slot( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ),
-        .dstArrayElement = static_cast<uint32_t>( buffer_handle.slot() ),
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        .pBufferInfo = &buffer_info,
-    };
-
-    vkUpdateDescriptorSets( device_.device(), 1, &write_set, 0, nullptr );
-    return VK_SUCCESS;
+void PipelineManager::bind_slots() const {
+    resource_manager_.bind_descriptors( global_descriptor_set_ );
 }
 
 Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
@@ -511,6 +505,7 @@ void PipelineManager::create_global_descriptor_layout() {
         std::vector<VkDescriptorPoolSize> pools;
         // Eventually we will extend this to support images etc.
         pools.emplace_back( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, limits.maxDescriptorSetStorageBuffers );
+        pools.emplace_back( VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, limits.maxDescriptorSetStorageImages );
 
         VkDescriptorPoolCreateInfo descriptor_pool_create_info{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -534,6 +529,12 @@ void PipelineManager::create_global_descriptor_layout() {
         layout_bindings.emplace_back( get_binding_slot( VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ),
                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                       limits.maxDescriptorSetStorageBuffers,
+                                      VK_SHADER_STAGE_ALL,
+                                      nullptr );
+
+        layout_bindings.emplace_back( get_binding_slot( VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ),
+                                      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                      limits.maxDescriptorSetStorageImages,
                                       VK_SHADER_STAGE_ALL,
                                       nullptr );
 
@@ -643,18 +644,17 @@ PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shad
             const auto matches_name = [&]( const auto& r ) { return std::get<2>( r ) == uniform.name; };
             if ( auto iter = std::ranges::find_if( range_list, matches_name ); iter != range_list.end() ) {
 
-                return std::unexpected(
-                    std::format(
-                        "Duplicate uniform named '{}' found with different properties:\n"
-                        "  - offset: {} (existing: {})\n"
-                        "  - size: {} (existing: {})\n"
-                        "  - type: {} (existing: {})",
-                        uniform.name,
-                        uniform.offset, std::get<0>( *iter ),
-                        uniform.size, std::get<1>( *iter ),
-                        uniform.type_name, std::get<3>( *iter )
-                    )
-                );
+                return std::unexpected( std::format( "Duplicate uniform named '{}' found with different properties:\n"
+                                                     "  - offset: {} (existing: {})\n"
+                                                     "  - size: {} (existing: {})\n"
+                                                     "  - type: {} (existing: {})",
+                                                     uniform.name,
+                                                     uniform.offset,
+                                                     std::get<0>( *iter ),
+                                                     uniform.size,
+                                                     std::get<1>( *iter ),
+                                                     uniform.type_name,
+                                                     std::get<3>( *iter ) ) );
             }
 
             // Check if the `(offset, size)` pair overlaps with any entries in `range_list`

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <aloe/core/Resources.h>
+#include <aloe/core/Handles.h>
 
 #include <volk.h>
 
@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "ResourceManager.h"
 #include <slang-com-ptr.h>
 
 namespace slang {
@@ -43,29 +44,6 @@ struct GraphicsPipelineInfo {
     auto operator<=>( const GraphicsPipelineInfo& other ) const = default;
 };
 
-struct PipelineHandle {
-    uint64_t id = 0;
-
-    uint64_t operator()() const { return id; }
-    auto operator<=>( const PipelineHandle& other ) const = default;
-};
-
-template<typename T>
-struct ShaderUniform {
-    static_assert( std::is_standard_layout_v<T> );
-    explicit ShaderUniform( uint32_t offset ) : offset( offset ) {}
-
-    uint32_t offset;// Using uint32_t
-    std::optional<T> data;
-
-    ShaderUniform set_value( const T& value ) {
-        data = value;
-        return *this;
-    }
-    auto operator<=>( const ShaderUniform& ) const = default;
-};
-
-// Pimpl style forward declaration for slang internals.
 struct SlangFilesystem;
 
 class PipelineManager {
@@ -95,22 +73,27 @@ class PipelineManager {
             uint32_t offset;
             uint32_t size;
             std::string name;
-            std::string type_name;// Added to store the type name
+            std::string type_name;
 
             auto operator<=>( const Uniform& other ) const = default;
         };
 
-        std::string name;// maps to `ShaderState::name`
+        std::string name;
         VkShaderStageFlags stage;
         VkShaderModule shader_module = VK_NULL_HANDLE;
-        std::vector<uint32_t> spirv;  // todo: not necessary to store, stored for tests.
-        std::vector<Uniform> uniforms;// sorted by `offset`
+        std::vector<uint32_t> spirv;
+        std::vector<Uniform> uniforms;
 
         auto operator<=>( const CompiledShaderState& other ) const = default;
     };
 
     struct UniformBlock {
         explicit UniformBlock( uint32_t total_size ) { data_.resize( total_size, 0 ); }
+
+        template<typename T>
+        const T& get( const ShaderUniform<T>& element ) const {
+            return *reinterpret_cast<const T*>( data_.data() + element.offset );
+        }
 
         template<typename T>
         void set( const ShaderUniform<T>& element ) {
@@ -133,16 +116,21 @@ class PipelineManager {
         std::variant<GraphicsPipelineInfo, ComputePipelineInfo> info;
 
         std::vector<CompiledShaderState> compiled_shaders = {};
+
         std::optional<UniformBlock> uniforms = std::nullopt;
+        std::vector<ResourceUsage> bound_resources = {};
+
         VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
 
         void free_state( Device& device );
         bool matches_shader( const ShaderState& shader ) const;
+        void remove_resource( uint32_t resource_id );
         auto operator<=>( const PipelineState& other ) const = default;
     };
 
     Device& device_;
+    ResourceManager& resource_manager_;
     std::vector<std::string> root_paths_;
     std::unordered_map<std::string, std::string> defines_;
 
@@ -182,18 +170,7 @@ public:
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle ) const;
 
     // todo: temporary API for binding a pipeline
-    void bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
-
-    // todo: temporary API for binding a resource
-    VkResult bind_buffer( ResourceManager& resource_manager,
-                          BufferHandle buffer_handle,
-                          VkDeviceSize offset = 0,
-                          VkDeviceSize range = VK_WHOLE_SIZE ) const;
-
-    template<typename T>
-    void set_uniform( PipelineHandle h, const ShaderUniform<T>& uniform ) {
-        pipelines_.at( h.id ).uniforms->set( uniform );
-    }
+    bool bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
 
     template<typename T>
         requires( std::is_standard_layout_v<T> )
@@ -202,13 +179,48 @@ public:
             for ( const auto& uniform : shader.uniforms ) {
                 if ( uniform.name == name ) {
                     assert( uniform.size == sizeof( T ) );
-                    return ShaderUniform<T>( uniform.offset );
+                    return ShaderUniform<T>( h, uniform.offset );
                 }
             }
         }
         assert( false );
-        return ShaderUniform<T>( 0 );
+        return ShaderUniform<T>( h, 0 );
     }
+
+    template<typename T>
+        requires( !(std::is_same_v<T, BufferHandle> || std::is_same_v<T, ImageHandle>) )
+    void set_uniform( const ShaderUniform<T>& uniform ) {
+        assert( uniform.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data." );
+        pipelines_.at( uniform.pipeline.id ).uniforms->set( uniform );
+    }
+
+    template<typename T>
+        requires( std::is_same_v<T, BufferHandle> || std::is_same_v<T, ImageHandle> )
+    bool set_uniform( const ShaderUniform<T>& uniform, ResourceUsage usage ) {
+        assert( uniform.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data." );
+        assert( std::visit( [&]( auto& r ) { return r == *uniform.data; }, usage.resource ) );
+
+        // Get the state we are referring too with `uniform::pipeline`
+        auto& pipeline = pipelines_.at( uniform.pipeline.id );
+        assert( pipeline.uniforms != std::nullopt );
+
+        // If we have an old resource bound, we need to remove its reference
+        const auto& old = pipeline.uniforms->get( uniform );
+        pipeline.remove_resource( old >> 32 );
+
+        // Try bind the resource (no-op if already bound)
+        const auto slot = resource_manager_.bind_resource( usage );
+        if ( slot == std::nullopt ) return false;
+
+        // Write the encoded `slot+id` to the uniform block
+        auto fake_uniform = ShaderUniform<T>( uniform.pipeline, uniform.offset );
+        pipeline.uniforms->set( fake_uniform.set_value( *slot ) );
+        pipeline.bound_resources.emplace_back( usage );
+
+        return true;
+    }
+
+    void bind_slots() const;
 
 private:
     // We need to rebuild our session when we change defines (as we ensure that all shaders are compiled with the same set of defines)
@@ -244,7 +256,7 @@ private:
     std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
 
 protected:
-    PipelineManager( Device& device, std::vector<std::string> root_paths );
+    PipelineManager( Device& device, ResourceManager& resource_manager, std::vector<std::string> root_paths );
 };
 
 }// namespace aloe

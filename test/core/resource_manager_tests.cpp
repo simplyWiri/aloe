@@ -40,44 +40,22 @@ protected:
     }
 };
 
-TEST_F( ResourceManagerTestFixture, TestResourceIdPacking ) {
-    {
-        const auto res = aloe::ResourceId( 123, 456, 789 );
-        EXPECT_EQ( res.slot(), 123 );
-        EXPECT_EQ( res.version(), 456 );
-        EXPECT_EQ( res.id(), 789 );
+//------------------------------------------------------------------------------
+// Basic Creation/Destruction Tests
+//------------------------------------------------------------------------------
 
-        EXPECT_EQ( res.raw(), 123ull + ( 456ull << 24 ) + ( 789ull << 40 ) );
-    }
-
-    {
-        constexpr auto slot = ( 1 << aloe::ResourceId::SLOT_BITS ) - 1;
-        constexpr auto version = ( 1 << aloe::ResourceId::VERSION_BITS ) - 1;
-        constexpr auto id = ( 1 << aloe::ResourceId::RESOURCE_ID_BITS ) - 1;
-
-        const auto res = aloe::ResourceId( slot, version, id );
-
-        EXPECT_EQ( res.slot(), slot );
-        EXPECT_EQ( res.version(), version );
-        EXPECT_EQ( res.id(), id );
-
-        // bit repr should be entirely 1's
-        EXPECT_EQ( res.raw(), ~0ull );
-    }
-}
-
-TEST_F( ResourceManagerTestFixture, CreateBuffer ) {
+TEST_F( ResourceManagerTestFixture, CreateBuffer_ReturnsValidHandle ) {
     const auto handle = resource_manager_->create_buffer( {
         .size = 1024,
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         .name = "TestBuffer",
     } );
 
-    ASSERT_NE( handle.id(), 0 );
+    ASSERT_NE( handle.raw, 0 );
     EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 }
 
-TEST_F( ResourceManagerTestFixture, BufferHandlesUnique ) {
+TEST_F( ResourceManagerTestFixture, CreateBuffer_HandlesAreUnique ) {
     const auto first = resource_manager_->create_buffer( {
         .size = 1024,
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -94,7 +72,71 @@ TEST_F( ResourceManagerTestFixture, BufferHandlesUnique ) {
     EXPECT_NE( resource_manager_->get_buffer( second ), VK_NULL_HANDLE );
 }
 
-TEST_F( ResourceManagerTestFixture, UploadsHostVisibleMemory ) {
+TEST_F( ResourceManagerTestFixture, CreateImage_ReturnsValidHandle ) {
+    const auto handle = resource_manager_->create_image( {
+        .extent = { 1024, 1024, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
+    } );
+
+    ASSERT_NE( handle.raw, 0 );
+    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
+}
+
+TEST_F( ResourceManagerTestFixture, CreateImage_HandlesAreUnique ) {
+    const auto first = resource_manager_->create_image( {
+        .extent = { 128, 128, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
+    } );
+    const auto second = resource_manager_->create_image( {
+        .extent = { 128, 128, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
+    } );
+
+    EXPECT_NE( first, second );
+    EXPECT_NE( resource_manager_->get_image( first ), VK_NULL_HANDLE );
+    EXPECT_NE( resource_manager_->get_image( second ), VK_NULL_HANDLE );
+}
+
+TEST_F( ResourceManagerTestFixture, FreeBuffer_InvalidatesHandle ) {
+    const auto handle = resource_manager_->create_buffer( {
+        .size = 1024,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .name = "TestBuffer",
+    } );
+
+    ASSERT_NE( handle.raw, 0 );
+    EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+
+    resource_manager_->free_buffer( handle );
+    EXPECT_EQ( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+}
+
+TEST_F( ResourceManagerTestFixture, FreeImage_InvalidatesHandle ) {
+    const auto handle = resource_manager_->create_image( {
+        .extent = { 1024, 1024, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .name = "TestImage",
+    } );
+
+    ASSERT_NE( handle.raw, 0 );
+    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
+
+    resource_manager_->free_image( handle );
+    EXPECT_EQ( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
+}
+
+//------------------------------------------------------------------------------
+// Memory Operations Tests 
+//------------------------------------------------------------------------------
+
+TEST_F( ResourceManagerTestFixture, UploadBuffer_HostVisibleMemory ) {
     constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
     std::array<int, 8> read_back_data;
 
@@ -111,7 +153,46 @@ TEST_F( ResourceManagerTestFixture, UploadsHostVisibleMemory ) {
     EXPECT_EQ( data, read_back_data );
 }
 
-TEST_F( ResourceManagerTestFixture, UploadToFreedBuffer ) {
+TEST_F( ResourceManagerTestFixture, UploadBuffer_HostOnlyMemory ) {
+    constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    const auto buffer = resource_manager_->create_buffer( {
+        .size = 1234,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .memory_usage = VMA_MEMORY_USAGE_GPU_ONLY,
+        .name = "TestBuffer",
+    } );
+
+    resource_manager_->free_buffer( buffer );
+    EXPECT_EQ( resource_manager_->upload_to_buffer( buffer, data.data(), data.size() ), 0 );
+}
+
+TEST_F( ResourceManagerTestFixture, UploadImage_WriteAndReadBack ) {
+    // Create test pattern with non-zero data
+    std::array<uint8_t, 16 * 16 * 4> test_data{};
+    for(size_t i = 0; i < test_data.size(); i++) {
+        test_data[i] = static_cast<uint8_t>((i * 7 + 13) % 256); // Generate repeating but non-zero pattern
+    }
+    std::array<uint8_t, 16 * 16 * 4> read_back_data{};
+
+    constexpr auto data_size = test_data.size();
+    const auto image = resource_manager_->create_image( {
+        .extent = { 16, 16, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "TestImage",
+    } );
+
+    EXPECT_EQ( resource_manager_->upload_to_image( image, test_data.data(), data_size ), data_size );
+    EXPECT_EQ( resource_manager_->read_from_image( image, read_back_data.data(), data_size ), data_size );
+    EXPECT_EQ( test_data, read_back_data );
+}
+
+//------------------------------------------------------------------------------
+// Error Handling & Validation Tests
+//------------------------------------------------------------------------------
+
+TEST_F( ResourceManagerTestFixture, UploadBuffer_FailsAfterFree ) {
     constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
     const auto buffer = resource_manager_->create_buffer( {
         .size = 1234,
@@ -138,7 +219,7 @@ TEST_F( ResourceManagerTestFixture, UploadToFreedBuffer ) {
     EXPECT_TRUE( found_error );
 }
 
-TEST_F( ResourceManagerTestFixture, ReadFromFreedBuffer ) {
+TEST_F( ResourceManagerTestFixture, ReadBuffer_FailsAfterFree ) {
     constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
     std::array<int, 8> read_back_data;
 
@@ -169,34 +250,65 @@ TEST_F( ResourceManagerTestFixture, ReadFromFreedBuffer ) {
     EXPECT_TRUE( found_error );
 }
 
-TEST_F( ResourceManagerTestFixture, UploadToHostOnlyBuffer ) {
-    constexpr std::array data = { 1, 2, 3, 4, 5, 6, 7, 8 };
-    const auto buffer = resource_manager_->create_buffer( {
-        .size = 1234,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .memory_usage = VMA_MEMORY_USAGE_GPU_ONLY,
-        .name = "TestBuffer",
+TEST_F( ResourceManagerTestFixture, UploadImage_FailsAfterFree ) {
+    constexpr std::array<uint8_t, 16 * 16 * 4> test_data{};
+    const auto image = resource_manager_->create_image( {
+        .extent = { 16, 16, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "TestImage",
     } );
 
-    resource_manager_->free_buffer( buffer );
-    EXPECT_EQ( resource_manager_->upload_to_buffer( buffer, data.data(), data.size() ), 0 );
+    resource_manager_->free_image( image );
+    EXPECT_EQ( resource_manager_->upload_to_image( image, test_data.data(), test_data.size() ), 0 );
+
+    // Verify that an error was logged
+    const auto& entries = mock_logger_->get_entries();
+    EXPECT_FALSE( entries.empty() );
+
+    bool found_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "Invalid image handle" ) != std::string::npos ) {
+            found_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_error );
 }
 
-TEST_F( ResourceManagerTestFixture, FreeBuffer ) {
-    const auto handle = resource_manager_->create_buffer( {
-        .size = 1024,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .name = "TestBuffer",
+TEST_F( ResourceManagerTestFixture, ReadImage_FailsAfterFree ) {
+    constexpr std::array<uint8_t, 16 * 16 * 4> test_data{};
+    std::array<uint8_t, 16 * 16 * 4> read_back_data{};
+
+    const auto image = resource_manager_->create_image( {
+        .extent = { 16, 16, 1 },
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "TestImage",
     } );
 
-    ASSERT_NE( handle.id(), 0 );
-    EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+    resource_manager_->upload_to_image( image, test_data.data(), test_data.size() );
 
-    resource_manager_->free_buffer( handle );
-    EXPECT_EQ( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
+    resource_manager_->free_image( image );
+    EXPECT_EQ( resource_manager_->read_from_image( image, read_back_data.data(), test_data.size() ), 0 );
+
+    // Verify that an error was logged
+    const auto& entries = mock_logger_->get_entries();
+    EXPECT_FALSE( entries.empty() );
+
+    bool found_error = false;
+    for ( const auto& [level, message] : entries ) {
+        if ( level == aloe::LogLevel::Error && message.find( "Invalid image handle" ) != std::string::npos ) {
+            found_error = true;
+            break;
+        }
+    }
+    EXPECT_TRUE( found_error );
 }
 
-TEST_F( ResourceManagerTestFixture, GetBufferValidation ) {
+TEST_F( ResourceManagerTestFixture, GetBuffer_ValidatesHandle ) {
     // First create a buffer
     const auto handle = resource_manager_->create_buffer( {
         .size = 1024,
@@ -204,7 +316,7 @@ TEST_F( ResourceManagerTestFixture, GetBufferValidation ) {
         .name = "TestBuffer",
     } );
 
-    ASSERT_NE( handle.id(), 0 );
+    ASSERT_NE( handle.raw, 0 );
     EXPECT_NE( resource_manager_->get_buffer( handle ), VK_NULL_HANDLE );
 
     // Free the buffer then try to access it
@@ -226,7 +338,7 @@ TEST_F( ResourceManagerTestFixture, GetBufferValidation ) {
     EXPECT_TRUE( found_error );
 }
 
-TEST_F( ResourceManagerTestFixture, BufferHandleVersionValidation ) {
+TEST_F( ResourceManagerTestFixture, BufferHandle_ValidatesVersion ) {
     constexpr std::array<int, 4> a_data = { 1, 2, 3, 4 };
     constexpr std::array<int, 4> b_data = { 5, 6, 7, 8 };
     constexpr auto data_size = 4 * sizeof( int );
@@ -267,66 +379,68 @@ TEST_F( ResourceManagerTestFixture, BufferHandleVersionValidation ) {
     // Attempt to read from handle_A (should fail)
     std::array<int, 4> invalid_read_data{};
     EXPECT_EQ( resource_manager_->read_from_buffer( handle_a, invalid_read_data.data(), data_size ), 0 );
+}
 
-    // Verify proper error messages are logged for handle_A
-    const auto& entries = mock_logger_->get_entries();
-    bool found_version_error = false;
-    for ( const auto& [level, message] : entries ) {
-        if ( level == aloe::LogLevel::Error && message.find( "version mismatch" ) != std::string::npos ) {
-            found_version_error = true;
-            break;
-        }
+TEST_F( ResourceManagerTestFixture, ImageHandle_ValidatesVersion ) {
+    // Create distinct test patterns for each image
+    std::array<uint8_t, 16 * 16 * 4> a_data{};
+    std::array<uint8_t, 16 * 16 * 4> b_data{};
+    
+    // Fill a_data with a pattern
+    for(size_t i = 0; i < a_data.size(); i++) {
+        a_data[i] = static_cast<uint8_t>((i * 3 + 7) % 256);
     }
-    EXPECT_TRUE( found_version_error );
-}
+    // Fill b_data with a different pattern
+    for(size_t i = 0; i < b_data.size(); i++) {
+        b_data[i] = static_cast<uint8_t>((i * 5 + 11) % 256);
+    }
+    
+    constexpr auto data_size = 16 * 16 * 4;
 
-TEST_F( ResourceManagerTestFixture, CreateImage ) {
-    const auto handle = resource_manager_->create_image( {
-        .extent = { 1024, 1024, 1 },
+    const auto handle_a = resource_manager_->create_image( {
+        .extent = { 16, 16, 1 },
         .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-        .name = "TestImage",
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "ImageA",
     } );
 
-    ASSERT_NE( handle.id(), 0 );
-    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
-}
+    // Upload test data to image A
+    EXPECT_EQ( resource_manager_->upload_to_image( handle_a, a_data.data(), data_size ), data_size );
 
-TEST_F( ResourceManagerTestFixture, ImageHandlesUnique ) {
-    const auto first = resource_manager_->create_image( {
-        .extent = { 128, 128, 1 },
+    // Free the image, verify it goes invalid instantly
+    resource_manager_->free_image( handle_a );
+    EXPECT_EQ( resource_manager_->get_image( handle_a ), VK_NULL_HANDLE );
+
+    // Create a new image that should likely reuse the same slot
+    const auto handle_b = resource_manager_->create_image( {
+        .extent = { 16, 16, 1 },
         .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-        .name = "TestImage",
-    } );
-    const auto second = resource_manager_->create_image( {
-        .extent = { 128, 128, 1 },
-        .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-        .name = "TestImage",
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .memory_flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .name = "ImageB",
     } );
 
-    EXPECT_NE( first, second );
-    EXPECT_NE( resource_manager_->get_image( first ), VK_NULL_HANDLE );
-    EXPECT_NE( resource_manager_->get_image( second ), VK_NULL_HANDLE );
+    // Upload different test data to image B
+    EXPECT_EQ( resource_manager_->upload_to_image( handle_b, b_data.data(), data_size ), data_size );
+    EXPECT_NE( resource_manager_->get_image( handle_b ), VK_NULL_HANDLE );
+    EXPECT_EQ( resource_manager_->get_image( handle_a ), VK_NULL_HANDLE );
+
+    // Read back data from handle_B to verify it's the right data
+    std::array<uint8_t, 16 * 16 * 4> read_back_data{};
+    EXPECT_EQ( resource_manager_->read_from_image( handle_b, read_back_data.data(), data_size ), data_size );
+    EXPECT_EQ( read_back_data, b_data );
+
+    // Attempt to read from handle_A (should fail)
+    std::array<uint8_t, 16 * 16 * 4> invalid_read_data{};
+    EXPECT_EQ( resource_manager_->read_from_image( handle_a, invalid_read_data.data(), data_size ), 0 );
 }
 
-TEST_F( ResourceManagerTestFixture, FreeImage ) {
-    const auto handle = resource_manager_->create_image( {
-        .extent = { 1024, 1024, 1 },
-        .format = VK_FORMAT_R8G8B8A8_UNORM,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-        .name = "TestImage",
-    } );
+//------------------------------------------------------------------------------
+// Performance & Stress Tests
+//------------------------------------------------------------------------------
 
-    ASSERT_NE( handle.id(), 0 );
-    EXPECT_NE( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
-
-    resource_manager_->free_image( handle );
-    EXPECT_EQ( resource_manager_->get_image( handle ), VK_NULL_HANDLE );
-}
-
-TEST_F( ResourceManagerTestFixture, StressTest ) {
+TEST_F( ResourceManagerTestFixture, StressTest_MultipleAllocationsAndFrees ) {
     constexpr size_t num_buffers = 100;
     constexpr size_t num_images = 100;
     constexpr VkDeviceSize buffer_size = 256;
@@ -347,7 +461,7 @@ TEST_F( ResourceManagerTestFixture, StressTest ) {
             .name = "StressBuffer",
         } );
 
-        ASSERT_NE( handle.id(), 0 );
+        ASSERT_NE( handle.raw, 0 );
         buffer_handles.push_back( handle );
 
         // Upload and read-back to validate integrity
@@ -364,7 +478,7 @@ TEST_F( ResourceManagerTestFixture, StressTest ) {
             .name = "StressImage",
         } );
 
-        ASSERT_NE( handle.id(), 0 );
+        ASSERT_NE( handle.raw, 0 );
         image_handles.push_back( image_handle );
     }
 

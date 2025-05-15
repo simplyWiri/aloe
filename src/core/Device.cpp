@@ -48,7 +48,8 @@ std::vector<Device::Queue> Device::queues_by_capability( VkQueueFlagBits capabil
 
 std::shared_ptr<PipelineManager> Device::make_pipeline_manager( const std::vector<std::string>& root_paths ) {
     assert(pipeline_manager_ == nullptr);
-    pipeline_manager_ = std::shared_ptr<PipelineManager>(new PipelineManager(*this, root_paths ));
+    assert(resource_manager_ != nullptr && "Must construct resource manager before pipeline manager");
+    pipeline_manager_ = std::shared_ptr<PipelineManager>(new PipelineManager(*this, *resource_manager_, root_paths ));
     return pipeline_manager_;
 }
 
@@ -255,6 +256,7 @@ VkResult Device::create_logical_device( Device& device, const DeviceSettings& se
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &sync2,
         .descriptorIndexing = VK_TRUE,
+        .descriptorBindingStorageImageUpdateAfterBind = VK_TRUE,
         .descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE,
         .descriptorBindingPartiallyBound = VK_TRUE,
         .runtimeDescriptorArray = VK_TRUE,
@@ -316,6 +318,66 @@ VkResult Device::create_allocator( Device& device ) {
     allocator_info.pVulkanFunctions = &vulkanFunctions;
 
     return vmaCreateAllocator( &allocator_info, &device.allocator_ );
+}
+
+void Device::immediate_submit(const Queue& queue, const std::function<void(VkCommandBuffer)>& work_fn) {
+    // Create command pool for this queue family
+    VkCommandPoolCreateInfo pool_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+        .queueFamilyIndex = queue.family_index
+    };
+
+    VkCommandPool command_pool;
+    if (vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create command pool for immediate submission");
+    }
+
+    // Allocate the command buffer
+    VkCommandBufferAllocateInfo alloc_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+
+    VkCommandBuffer command_buffer;
+    vkAllocateCommandBuffers(device_, &alloc_info, &command_buffer);
+
+    // Begin recording
+    VkCommandBufferBeginInfo begin_info{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    };
+
+    vkBeginCommandBuffer(command_buffer, &begin_info);
+
+    // Execute the work
+    work_fn(command_buffer);
+
+    vkEndCommandBuffer(command_buffer);
+
+    // Submit and wait
+    VkSubmitInfo submit_info{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &command_buffer
+    };
+
+    VkFenceCreateInfo fence_info{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO
+    };
+
+    VkFence fence;
+    vkCreateFence(device_, &fence_info, nullptr, &fence);
+
+    vkQueueSubmit(queue.queue, 1, &submit_info, fence);
+    vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+
+    // Cleanup
+    vkDestroyFence(device_, fence, nullptr);
+    vkFreeCommandBuffers(device_, command_pool, 1, &command_buffer);
+    vkDestroyCommandPool(device_, command_pool, nullptr);
 }
 
 constexpr LogLevel to_log_level( VkDebugUtilsMessageSeverityFlagBitsEXT severity ) {
