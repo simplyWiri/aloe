@@ -100,19 +100,9 @@ class PipelineManager {
         auto operator<=>( const CompiledShaderState& other ) const = default;
     };
 
-    class UniformBlock {
-    public:
-        struct StageBinding {
-            VkShaderStageFlags stage_flags = 0;
-            uint32_t offset = 0;
-            uint32_t size = 0;
-            auto operator<=>( const StageBinding& ) const = default;
-        };
-
-        explicit UniformBlock( const std::vector<StageBinding>& bindings, uint32_t total_size )
-            : stage_bindings_( bindings ) {
-            data_.resize( total_size );
-            std::ranges::fill( data_, uint8_t{ 0 } );
+    struct UniformBlock {
+        explicit UniformBlock( uint32_t total_size ) {
+            data_.resize( total_size, 0 );
         }
 
         template<typename T>
@@ -123,13 +113,11 @@ class PipelineManager {
 
         const void* data() const { return data_.data(); }
         std::size_t size() const { return data_.size(); }
-        const std::vector<StageBinding>& get_bindings() const { return stage_bindings_; }
 
         auto operator<=>( const UniformBlock& other ) const = default;
 
     private:
         std::vector<uint8_t> data_;
-        std::vector<StageBinding> stage_bindings_;
     };
 
     struct PipelineState {
@@ -200,14 +188,12 @@ public:
     }
 
     template<typename T> requires( std::is_standard_layout_v<T> )
-    ShaderUniform<T> get_uniform_handle( PipelineHandle h, VkShaderStageFlags stage, std::string_view name ) const {
+    ShaderUniform<T> get_uniform_handle( PipelineHandle h, std::string_view name ) const {
         for ( const auto& shader : pipelines_.at( h.id ).compiled_shaders ) {
-            if ( shader.stage == stage ) {
-                for ( const auto& uniform : shader.uniforms ) {
-                    if ( uniform.name == name ) {
-                        assert( uniform.size == sizeof( T ) );
-                        return ShaderUniform<T>( uniform.offset );
-                    }
+            for ( const auto& uniform : shader.uniforms ) {
+                if ( uniform.name == name ) {
+                    assert( uniform.size == sizeof( T ) );
+                    return ShaderUniform<T>( uniform.offset );
                 }
             }
         }
@@ -238,3 +224,5 @@ protected:
 };
 
 }// namespace aloe
+
+

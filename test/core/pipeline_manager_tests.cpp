@@ -446,12 +446,9 @@ TEST_F( PipelineManagerTestFixture, UniformBlockBasicCompute ) {
     const aloe::ShaderCompileInfo shader_info{ .name = "basic_uniform.slang", .entry_point = "compute_main" };
     const auto pipeline_handle = compile_and_validate( { shader_info } );
     ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
-    auto h_time = pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "time" );
-    auto h_frame =
-        pipeline_manager_->get_uniform_handle<int>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "frameCount" );
-    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
-                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                               "outbuf_handle" );
+    auto h_time = pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, "time" );
+    auto h_frame = pipeline_manager_->get_uniform_handle<int>( *pipeline_handle, "frameCount" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "UniformOut", { 0.0f, 0.0f } );
     pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
@@ -492,11 +489,8 @@ TEST_F( PipelineManagerTestFixture, UniformBlockStruct ) {
     const aloe::ShaderCompileInfo shader_info{ .name = "struct_uniform.slang", .entry_point = "compute_main" };
     const auto pipeline_handle = compile_and_validate( { shader_info } );
     ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
-    auto h_params =
-        pipeline_manager_->get_uniform_handle<MyParams>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "params" );
-    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
-                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                               "outbuf_handle" );
+    auto h_params = pipeline_manager_->get_uniform_handle<MyParams>( *pipeline_handle, "params" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "StructUniformOut", { 0.0f, 0.0f } );
     pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
@@ -531,11 +525,8 @@ TEST_F( PipelineManagerTestFixture, UniformPersistenceAcrossDispatches ) {
     const aloe::ShaderCompileInfo shader_info{ .name = "persist_uniform.slang", .entry_point = "compute_main" };
     const auto pipeline_handle = compile_and_validate( { shader_info } );
     ASSERT_TRUE( pipeline_handle ) << pipeline_handle.error();
-    auto h_myval =
-        pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, VK_SHADER_STAGE_COMPUTE_BIT, "myval" );
-    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle,
-                                                                               VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                               "outbuf_handle" );
+    auto h_myval = pipeline_manager_->get_uniform_handle<float>( *pipeline_handle, "myval" );
+    auto h_outbuf = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( *pipeline_handle, "outbuf_handle" );
     auto outbuf = create_and_upload_buffer( "PersistUniformOut", { 0.0f } );
     pipeline_manager_->bind_buffer( *resource_manager_, outbuf );
 
@@ -621,9 +612,7 @@ TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
     ASSERT_TRUE( pipeline_handle_result.has_value() ) << pipeline_handle_result.error();
     aloe::PipelineHandle pipeline_handle = *pipeline_handle_result;
 
-    auto h_data_buffer = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
-                                                                                    VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                                    "data_buffer" );
+    auto h_data_buffer = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "data_buffer" );
 
     pipeline_manager_->set_uniform( pipeline_handle, h_data_buffer.set_value( buffer_handle ) );
 
@@ -684,15 +673,9 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     const aloe::ShaderCompileInfo shader_info{ .name = "multiply_buffers.slang", .entry_point = "compute_main" };
     aloe::PipelineHandle pipeline_handle = *compile_and_validate( { shader_info } );
 
-    auto h_buffer1 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
-                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                                "buffer1_handle" );
-    auto h_buffer2 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
-                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                                "buffer2_handle" );
-    auto h_buffer3 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle,
-                                                                                VK_SHADER_STAGE_COMPUTE_BIT,
-                                                                                "buffer3_handle" );
+    auto h_buffer1 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "buffer1_handle" );
+    auto h_buffer2 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "buffer2_handle" );
+    auto h_buffer3 = pipeline_manager_->get_uniform_handle<aloe::BufferHandle>( pipeline_handle, "buffer3_handle" );
 
     pipeline_manager_->set_uniform( pipeline_handle, h_buffer1.set_value( buffer1 ) );
     pipeline_manager_->set_uniform( pipeline_handle, h_buffer2.set_value( buffer2 ) );
@@ -714,6 +697,7 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     }
 }
 
-// todo:
-// 2. Test usage of overlapping ranges once graphics pipelines are supported :y:
-// 3. Test usage of equivalent ranges once graphics pipelines are supported :n:
+// Uniform block verification todos:
+// 1. Test that aliasing types at the same offset results in an error
+// 2. Test that overlapping ranges with different names results in an error
+// 3. Test that same types at the same offset is allowed

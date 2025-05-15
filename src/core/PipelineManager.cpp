@@ -218,7 +218,12 @@ void PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buff
                              0,
                              nullptr );
 
-    vkCmdPushConstants( buffer, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pipeline.uniforms->size(), pipeline.uniforms->data() );
+    vkCmdPushConstants( buffer,
+                        pipeline.layout,
+                        VK_SHADER_STAGE_COMPUTE_BIT,
+                        0,
+                        pipeline.uniforms->size(),
+                        pipeline.uniforms->data() );
     vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline );
 }
 
@@ -588,28 +593,51 @@ PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
 
 std::expected<PipelineManager::UniformBlock, std::string>
 PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shaders ) {
-    std::vector<UniformBlock::StageBinding> stage_bindings;
     uint32_t global_max_offset = 0;
-
-    // track ranges per stage for overlap check
-    std::vector<std::tuple<VkShaderStageFlags, uint32_t, uint32_t>> stage_ranges;
+    std::vector<std::tuple<uint32_t, uint32_t, std::string>> range_list;// (offset, size, name) for overlap checking
 
     for ( const auto& shader : shaders ) {
         if ( shader.uniforms.empty() ) continue;
 
         assert( std::ranges::is_sorted( shader.uniforms, {}, &CompiledShaderState::Uniform::offset ) );
 
-        const uint32_t stage_min_offset = shader.uniforms.front().offset;
-        const uint32_t stage_max_end_offset = shader.uniforms.back().offset + shader.uniforms.back().size;
-        const uint32_t stage_size = stage_max_end_offset - stage_min_offset;
+        // Check each uniform's name and size against previously seen uniforms
+        for ( const auto& uniform : shader.uniforms ) {
+            auto&& entry = std::forward_as_tuple( uniform.offset, uniform.size, uniform.name );
 
-        assert( stage_size > 0 );
+            // In the case we already found an "identical" uniform, we can skip it. (note: types which alias in size
+            // will pass this check silently).
+            if ( std::ranges::contains( range_list, entry ) ) { continue; }
 
-        global_max_offset = std::max( global_max_offset, stage_max_end_offset );
+            // Check if the uniform name is already contained in `range_list`
+            if ( std::ranges::any_of( range_list,
+                                      [&]( const auto& r ) { return std::get<2>( r ) == uniform.name; } ) ) {
+                return std::unexpected( std::format( "Duplicate uniform name '{}' found.", uniform.name ) );
+            }
 
-        stage_bindings.emplace_back( shader.stage, stage_min_offset, stage_size );
-        stage_ranges.emplace_back( shader.stage, stage_min_offset, stage_max_end_offset );
+            // Check if the `(offset, size)` pair overlaps with any entries in `range_list`
+            const auto u_start = uniform.offset;
+            const auto u_end = uniform.offset + uniform.size;
+            for ( const auto& [r_start, r_size, n] : range_list ) {
+                const auto r_end = r_start + r_size;
+                if ( u_start < r_end && u_end > r_start ) {
+                    return std::unexpected( std::format( "Uniform '{}' (offset {}, size {}) overlaps with '{}'.",
+                                                         uniform.name,
+                                                         u_start,
+                                                         uniform.size,
+                                                         n ) );
+                }
+            }
+
+            // Insert `entry` into `range_list`
+            range_list.emplace_back( entry );
+            std::ranges::sort( range_list, {}, []( const auto& t ) { return std::get<0>( t ); } );
+        }
     }
+
+    if ( range_list.empty() ) { return UniformBlock{ 0 }; }
+
+    global_max_offset = std::get<0>( range_list.back() ) + std::get<1>( range_list.back() );
 
     // Check if we are trying to create a push constant greater than our physical device capacities
     if ( global_max_offset > device_.get_physical_device_limits().maxPushConstantsSize ) {
@@ -619,7 +647,7 @@ PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shad
                          device_.get_physical_device_limits().maxPushConstantsSize ) );
     }
 
-    return UniformBlock( stage_bindings, global_max_offset );
+    return UniformBlock{ global_max_offset };
 }
 
 std::expected<VkPipelineLayout, std::string>
