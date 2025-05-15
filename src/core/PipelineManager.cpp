@@ -113,7 +113,19 @@ void PipelineManager::PipelineState::free_state( Device& device ) {
 }
 
 bool PipelineManager::PipelineState::matches_shader( const ShaderState& shader ) const {
-    return shader.name == info.compute_shader.name;
+    return std::visit(
+        [&]( const auto& pipeline_info ) -> bool {
+            using T = std::decay_t<decltype( pipeline_info )>;
+            if constexpr ( std::is_same_v<T, ComputePipelineInfo> ) {
+                return shader.name == pipeline_info.compute_shader.name;
+            } else if constexpr ( std::is_same_v<T, GraphicsPipelineInfo> ) {
+                return shader.name == pipeline_info.vertex_shader.name ||
+                    shader.name == pipeline_info.fragment_shader.name;
+            } else {
+                return false;
+            }
+        },
+        info );
 }
 
 PipelineManager::PipelineManager( Device& device, std::vector<std::string> root_paths )
@@ -158,7 +170,7 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
     if ( !uniform_block ) { return std::unexpected( uniform_block.error() ); }
     state.uniforms = std::move( *uniform_block );
 
-    const auto pipeline_layout = get_pipeline_layout( { *compiled_shader } );
+    const auto pipeline_layout = get_pipeline_layout( state.compiled_shaders );
     if ( !pipeline_layout ) { return std::unexpected( pipeline_layout.error() ); }
     state.layout = *pipeline_layout;
 
@@ -178,6 +190,33 @@ PipelineManager::compile_pipeline( const ComputePipelineInfo& compute_pipeline )
     if ( result != VK_SUCCESS ) {
         return std::unexpected( std::format( "Failed to make compute pipeline, error: {}", result ) );
     }
+
+    state.version++;
+    return PipelineHandle{ state.id };
+}
+
+std::expected<PipelineHandle, std::string>
+PipelineManager::compile_pipeline( const GraphicsPipelineInfo& graphics_pipeline ) {
+    auto& state = get_pipeline_state( graphics_pipeline );
+    state.free_state( device_ );// if we are re-compiling, ensure we free our prior (i.a) state
+
+    // Compile our shader for the pipeline
+    for ( const auto& shader : { graphics_pipeline.vertex_shader, graphics_pipeline.fragment_shader } ) {
+        const auto compiled_shader = get_compiled_shader( shader );
+        if ( !compiled_shader ) { return std::unexpected( compiled_shader.error() ); }
+        state.compiled_shaders.emplace_back( *compiled_shader );
+    }
+
+    // Reflect and ensure that our uniform blocks (push constants) do not overlap.
+    auto uniform_block = get_uniform_block( state.compiled_shaders );
+    if ( !uniform_block ) { return std::unexpected( uniform_block.error() ); }
+    state.uniforms = std::move( *uniform_block );
+
+    const auto pipeline_layout = get_pipeline_layout( state.compiled_shaders );
+    if ( !pipeline_layout ) { return std::unexpected( pipeline_layout.error() ); }
+    state.layout = *pipeline_layout;
+
+    // todo: implement proper graphics pipeline creation
 
     state.version++;
     return PipelineHandle{ state.id };
@@ -295,18 +334,6 @@ Slang::ComPtr<slang::ISession> PipelineManager::get_session() {
     }
 
     return session_;
-}
-
-PipelineManager::PipelineState& PipelineManager::get_pipeline_state( const ComputePipelineInfo& pipeline_info ) {
-    auto iter =
-        std::ranges::find_if( pipelines_, [&]( const PipelineState& result ) { return result.info == pipeline_info; } );
-    if ( iter != pipelines_.end() ) {
-        return *iter;
-    } else {
-        const auto idx = pipelines_.size();
-        pipelines_.emplace_back( PipelineState{ static_cast<uint32_t>( idx ), 0, pipeline_info, {} } );
-        return pipelines_.back();
-    }
 }
 
 PipelineManager::ShaderState& PipelineManager::get_shader_state( const ShaderCompileInfo& info ) {
@@ -433,8 +460,9 @@ void PipelineManager::recompile_dependents( const std::vector<std::string>& shad
                              } );
                          } );
 
-
-    for ( const auto& pipeline : all_pipelines ) { compile_pipeline( pipeline.info ); }
+    for ( const auto& pipeline : all_pipelines ) {
+        std::visit( [&]( const auto& pipeline_info ) { compile_pipeline( pipeline_info ); }, pipeline.info );
+    }
 }
 
 void PipelineManager::reflect_module( const ShaderCompileInfo& info, CompiledShaderState& state ) {
@@ -467,6 +495,7 @@ void PipelineManager::reflect_module( const ShaderCompileInfo& info, CompiledSha
             uniform.name = param->getName();
             uniform.offset = param->getOffset();
             uniform.size = param->getTypeLayout()->getSize();
+            uniform.type_name = param->getTypeLayout()->getType()->getName();
         }
     }
 
@@ -594,7 +623,8 @@ PipelineManager::get_compiled_shader( const ShaderCompileInfo& info ) {
 std::expected<PipelineManager::UniformBlock, std::string>
 PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shaders ) {
     uint32_t global_max_offset = 0;
-    std::vector<std::tuple<uint32_t, uint32_t, std::string>> range_list;// (offset, size, name) for overlap checking
+    std::vector<std::tuple<uint32_t, uint32_t, std::string, std::string>>
+        range_list;// (offset, size, name, typename) for overlap checking
 
     for ( const auto& shader : shaders ) {
         if ( shader.uniforms.empty() ) continue;
@@ -603,22 +633,34 @@ PipelineManager::get_uniform_block( const std::vector<CompiledShaderState>& shad
 
         // Check each uniform's name and size against previously seen uniforms
         for ( const auto& uniform : shader.uniforms ) {
-            auto&& entry = std::forward_as_tuple( uniform.offset, uniform.size, uniform.name );
+            auto&& entry = std::forward_as_tuple( uniform.offset, uniform.size, uniform.name, uniform.type_name );
 
             // In the case we already found an "identical" uniform, we can skip it. (note: types which alias in size
             // will pass this check silently).
             if ( std::ranges::contains( range_list, entry ) ) { continue; }
 
             // Check if the uniform name is already contained in `range_list`
-            if ( std::ranges::any_of( range_list,
-                                      [&]( const auto& r ) { return std::get<2>( r ) == uniform.name; } ) ) {
-                return std::unexpected( std::format( "Duplicate uniform name '{}' found.", uniform.name ) );
+            const auto matches_name = [&]( const auto& r ) { return std::get<2>( r ) == uniform.name; };
+            if ( auto iter = std::ranges::find_if( range_list, matches_name ); iter != range_list.end() ) {
+
+                return std::unexpected(
+                    std::format(
+                        "Duplicate uniform named '{}' found with different properties:\n"
+                        "  - offset: {} (existing: {})\n"
+                        "  - size: {} (existing: {})\n"
+                        "  - type: {} (existing: {})",
+                        uniform.name,
+                        uniform.offset, std::get<0>( *iter ),
+                        uniform.size, std::get<1>( *iter ),
+                        uniform.type_name, std::get<3>( *iter )
+                    )
+                );
             }
 
             // Check if the `(offset, size)` pair overlaps with any entries in `range_list`
             const auto u_start = uniform.offset;
             const auto u_end = uniform.offset + uniform.size;
-            for ( const auto& [r_start, r_size, n] : range_list ) {
+            for ( const auto& [r_start, r_size, n, tn] : range_list ) {
                 const auto r_end = r_start + r_size;
                 if ( u_start < r_end && u_end > r_start ) {
                     return std::unexpected( std::format( "Uniform '{}' (offset {}, size {}) overlaps with '{}'.",

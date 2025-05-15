@@ -697,7 +697,206 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
     }
 }
 
-// Uniform block verification todos:
-// 1. Test that aliasing types at the same offset results in an error
-// 2. Test that overlapping ranges with different names results in an error
-// 3. Test that same types at the same offset is allowed
+TEST_F(PipelineManagerTestFixture, UniformBlockAliasedTypesAtSameOffset) {
+    pipeline_manager_->set_virtual_file(
+        "aliased_uniform.slang",
+        R"(
+        // Both uniforms at offset 0, different types, same name
+        [shader("vertex")]
+        void vertex_main(uniform float param_one) { }
+        [shader("fragment")]
+        void fragment_main(uniform int param_one) { }
+        )"
+    );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "aliased_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "aliased_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
+    ASSERT_FALSE(pipeline_handle.has_value());
+    EXPECT_TRUE(pipeline_handle.error().find("param_one") != std::string::npos ||
+                pipeline_handle.error().find("float") != std::string::npos ||
+                pipeline_handle.error().find("int") != std::string::npos);
+}
+
+TEST_F(PipelineManagerTestFixture, UniformBlockOverlappingRangesDifferentNames) {
+    pipeline_manager_->set_virtual_file(
+        "overlap_uniform.slang",
+        R"(
+        // Both uniforms at offset 0, different names, same types
+        [shader("vertex")]
+        void vertex_main(uniform float foo) { }
+        [shader("fragment")]
+        void fragment_main(uniform float bar) { }
+        )"
+    );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
+    ASSERT_FALSE(pipeline_handle.has_value());
+    EXPECT_TRUE(pipeline_handle.error().find("overlap") != std::string::npos ||
+                pipeline_handle.error().find("conflict") != std::string::npos);
+}
+
+TEST_F(PipelineManagerTestFixture, UniformBlockSupersetRange) {
+    pipeline_manager_->set_virtual_file(
+        "overlap_uniform.slang",
+        R"(
+        [shader("vertex")]
+        void vertex_main(uniform float foo) { }
+        [shader("fragment")]
+        void fragment_main(uniform float foo, uniform float frag_only) { }
+        )"
+    );
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "overlap_uniform.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "overlap_uniform.slang", .entry_point = "fragment_main" }
+    };
+    const auto pipeline_handle = pipeline_manager_->compile_pipeline(pipeline_info);
+    ASSERT_TRUE(pipeline_handle.has_value());
+}
+
+
+TEST_F(PipelineManagerTestFixture, MultipleEntryPointsSingleFile) {
+    pipeline_manager_->set_virtual_file(
+        "multi_entry.slang",
+        R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+
+        [shader("vertex")]
+        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(1, 0, 0, 1);
+            return output;
+        }
+
+        [shader("fragment")]
+        float4 fragment_main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )"
+    );
+
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "multi_entry.slang", .entry_point = "vertex_main" },
+        .fragment_shader = { .name = "multi_entry.slang", .entry_point = "fragment_main" }
+    };
+
+    const auto handle = pipeline_manager_->compile_pipeline(pipeline_info);
+    ASSERT_TRUE(handle) << handle.error();
+
+    // Store initial versions
+    const auto initial_version = pipeline_manager_->get_pipeline_version(*handle);
+
+    // Modify the shader and verify versions are updated
+    pipeline_manager_->set_virtual_file(
+        "multi_entry.slang",
+        R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+
+        [shader("vertex")]
+        VertexOutput vertex_main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(0, 1, 0, 1);  // Changed from red to green
+            return output;
+        }
+
+        [shader("fragment")]
+        float4 fragment_main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )"
+    );
+
+    const auto updated_version = pipeline_manager_->get_pipeline_version(*handle);
+    EXPECT_GT(updated_version, initial_version);
+}
+
+TEST_F(PipelineManagerTestFixture, SeparateFilesWithSharedDependency) {
+    // First create a shared header file
+    pipeline_manager_->set_virtual_file(
+        "shared.slang",
+        R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+        };
+        )"
+    );
+
+    // Create vertex shader
+    pipeline_manager_->set_virtual_file(
+        "vertex.slang",
+        R"(
+        #include "shared.slang"
+
+        [shader("vertex")]
+        VertexOutput main(uint vertex_id : SV_VertexID) {
+            VertexOutput output;
+            const float2 positions[] = {
+                float2(-1, -1), float2(3, -1), float2(-1, 3)
+            };
+            output.position = float4(positions[vertex_id], 0, 1);
+            output.color = float4(1, 0, 0, 1);
+            return output;
+        }
+        )"
+    );
+
+    // Create fragment shader
+    pipeline_manager_->set_virtual_file(
+        "fragment.slang",
+        R"(
+        #include "shared.slang"
+
+        [shader("fragment")]
+        float4 main(VertexOutput input) : SV_Target {
+            return input.color;
+        }
+        )"
+    );
+
+    aloe::GraphicsPipelineInfo pipeline_info{
+        .vertex_shader = { .name = "vertex.slang", .entry_point = "main" },
+        .fragment_shader = { .name = "fragment.slang", .entry_point = "main" }
+    };
+
+    const auto handle = pipeline_manager_->compile_pipeline(pipeline_info);
+    ASSERT_TRUE(handle) << handle.error();
+
+    // Store initial versions
+    const auto initial_version = pipeline_manager_->get_pipeline_version(*handle);
+
+    // Modify the shared header and verify both shaders are recompiled
+    pipeline_manager_->set_virtual_file(
+        "shared.slang",
+        R"(
+        struct VertexOutput {
+            float4 position : SV_Position;
+            float4 color : COLOR;
+            float2 uv : TEXCOORD;  // Added new field
+        };
+        )"
+    );
+
+    const auto updated_version = pipeline_manager_->get_pipeline_version(*handle);
+    EXPECT_GT(updated_version, initial_version);
+}
+
+

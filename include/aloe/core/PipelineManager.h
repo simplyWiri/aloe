@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <expected>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <slang-com-ptr.h>
@@ -33,6 +34,13 @@ struct ComputePipelineInfo {
     ShaderCompileInfo compute_shader = {};
 
     auto operator<=>( const ComputePipelineInfo& other ) const = default;
+};
+
+struct GraphicsPipelineInfo {
+    ShaderCompileInfo vertex_shader = {};
+    ShaderCompileInfo fragment_shader = {};
+
+    auto operator<=>( const GraphicsPipelineInfo& other ) const = default;
 };
 
 struct PipelineHandle {
@@ -87,6 +95,7 @@ class PipelineManager {
             uint32_t offset;
             uint32_t size;
             std::string name;
+            std::string type_name;// Added to store the type name
 
             auto operator<=>( const Uniform& other ) const = default;
         };
@@ -101,9 +110,7 @@ class PipelineManager {
     };
 
     struct UniformBlock {
-        explicit UniformBlock( uint32_t total_size ) {
-            data_.resize( total_size, 0 );
-        }
+        explicit UniformBlock( uint32_t total_size ) { data_.resize( total_size, 0 ); }
 
         template<typename T>
         void set( const ShaderUniform<T>& element ) {
@@ -123,7 +130,7 @@ class PipelineManager {
     struct PipelineState {
         uint32_t id;
         uint32_t version;
-        ComputePipelineInfo info;
+        std::variant<GraphicsPipelineInfo, ComputePipelineInfo> info;
 
         std::vector<CompiledShaderState> compiled_shaders = {};
         std::optional<UniformBlock> uniforms = std::nullopt;
@@ -163,6 +170,7 @@ public:
 
     // Primary method for interaction with the API
     std::expected<PipelineHandle, std::string> compile_pipeline( const ComputePipelineInfo& pipeline_info );
+    std::expected<PipelineHandle, std::string> compile_pipeline( const GraphicsPipelineInfo& pipeline_info );
 
     // Update the define(s) for all shaders being compiled
     void set_define( const std::string& name, const std::string& value );
@@ -183,11 +191,12 @@ public:
                           VkDeviceSize range = VK_WHOLE_SIZE ) const;
 
     template<typename T>
-    void set_uniform(PipelineHandle h, const ShaderUniform<T>& uniform) {
-        pipelines_.at(h.id).uniforms->set(uniform);
+    void set_uniform( PipelineHandle h, const ShaderUniform<T>& uniform ) {
+        pipelines_.at( h.id ).uniforms->set( uniform );
     }
 
-    template<typename T> requires( std::is_standard_layout_v<T> )
+    template<typename T>
+        requires( std::is_standard_layout_v<T> )
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, std::string_view name ) const {
         for ( const auto& shader : pipelines_.at( h.id ).compiled_shaders ) {
             for ( const auto& uniform : shader.uniforms ) {
@@ -203,8 +212,22 @@ public:
 
 private:
     // We need to rebuild our session when we change defines (as we ensure that all shaders are compiled with the same set of defines)
+    template<typename PipelineInfoT>
+    PipelineState& get_pipeline_state( const PipelineInfoT& pipeline_info ) {
+        auto iter = std::ranges::find_if( pipelines_, [&]( const PipelineState& result ) {
+            return std::holds_alternative<PipelineInfoT>( result.info ) &&
+                std::get<PipelineInfoT>( result.info ) == pipeline_info;
+        } );
+        if ( iter != pipelines_.end() ) {
+            return *iter;
+        } else {
+            const auto idx = pipelines_.size();
+            pipelines_.emplace_back( PipelineState{ static_cast<uint32_t>( idx ), 0, pipeline_info, {} } );
+            return pipelines_.back();
+        }
+    }
+
     Slang::ComPtr<slang::ISession> get_session();
-    PipelineState& get_pipeline_state( const ComputePipelineInfo& pipeline_info );
     ShaderState& get_shader_state( const ShaderCompileInfo& path );
 
     // Shader processing, if string is returned - an error state has been set.
@@ -219,10 +242,9 @@ private:
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
     std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
+
 protected:
     PipelineManager( Device& device, std::vector<std::string> root_paths );
 };
 
 }// namespace aloe
-
-
