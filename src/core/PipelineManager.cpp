@@ -236,6 +236,51 @@ PipelineManager::compile_pipeline( const GraphicsPipelineInfo& graphics_pipeline
     return PipelineHandle{ state.id };
 }
 
+PipelineManager::PipelineState* PipelineManager::get_pipeline_state( PipelineHandle handle ) {
+    return handle.id >= pipelines_.size() ? nullptr : &pipelines_[handle.id];
+}
+
+const PipelineManager::PipelineState* PipelineManager::get_pipeline_state( PipelineHandle handle ) const {
+    return handle.id >= pipelines_.size() ? nullptr : &pipelines_[handle.id];
+}
+
+bool PipelineManager::is_graphics_pipeline( PipelineHandle handle ) const {
+    const auto* state = get_pipeline_state( handle );
+    return state ? std::holds_alternative<GraphicsPipelineInfo>( state->info ) : false;
+}
+
+uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
+    const auto* state = get_pipeline_state( handle );
+    return state ? state->version : 0;
+}
+
+const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
+    constexpr static std::vector<uint32_t> empty;
+    const auto* state = get_pipeline_state( handle );
+    return state ? state->compiled_shaders.front().spirv : empty;
+}
+
+bool PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const {
+    // If we have an invalid pipeline.
+    const auto* state = get_pipeline_state( handle );
+    if ( state == nullptr ) return false;
+
+    // If any of our bound uniforms are invalid
+    const auto is_invalid = [&]( const auto& resource ) { return !resource_manager_.validate_access( resource ); };
+    if ( std::ranges::any_of( state->bound_resources, is_invalid ) ) return false;
+
+    const auto is_graphics = is_graphics_pipeline( handle );
+    const auto bind_point = is_graphics ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE;
+    const auto pc_stage = is_graphics ? VK_SHADER_STAGE_ALL_GRAPHICS : VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // todo: we should only bind the descriptor set once per "frame" or "task".
+    vkCmdBindDescriptorSets( buffer, bind_point, state->layout, 0, 1, &global_descriptor_set_, 0, nullptr );
+    vkCmdPushConstants( buffer, state->layout, pc_stage, 0, state->uniforms->size(), state->uniforms->data() );
+    vkCmdBindPipeline( buffer, bind_point, state->pipeline );
+
+    return true;
+}
+
 void PipelineManager::set_define( const std::string& name, const std::string& value ) {
     defines_[name] = value;
     session_ = nullptr;
@@ -249,41 +294,6 @@ void PipelineManager::set_virtual_file( const std::string& name, const std::stri
     filesystem_->set_file( name, contents );
 
     recompile_dependents( { name } );
-}
-
-uint64_t PipelineManager::get_pipeline_version( PipelineHandle handle ) const {
-    return pipelines_.at( handle.id ).version;
-}
-
-const std::vector<uint32_t>& PipelineManager::get_pipeline_spirv( PipelineHandle handle ) const {
-    return pipelines_.at( handle.id ).compiled_shaders.front().spirv;
-}
-
-bool PipelineManager::bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const {
-    const auto& pipeline = pipelines_.at( handle.id );
-
-    for ( const auto& res : pipeline.bound_resources ) {
-        if ( !resource_manager_.validate_access( res ) ) { return false; }
-    }
-
-    vkCmdBindDescriptorSets( buffer,
-                             VK_PIPELINE_BIND_POINT_COMPUTE,
-                             pipeline.layout,
-                             0,
-                             1,
-                             &global_descriptor_set_,
-                             0,
-                             nullptr );
-
-    vkCmdPushConstants( buffer,
-                        pipeline.layout,
-                        VK_SHADER_STAGE_COMPUTE_BIT,
-                        0,
-                        pipeline.uniforms->size(),
-                        pipeline.uniforms->data() );
-    vkCmdBindPipeline( buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline );
-
-    return true;
 }
 
 void PipelineManager::bind_slots() const {

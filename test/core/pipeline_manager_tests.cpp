@@ -1,3 +1,4 @@
+#include <aloe/core/CommandList.h>
 #include <aloe/core/Device.h>
 #include <aloe/core/PipelineManager.h>
 #include <aloe/core/ResourceManager.h>
@@ -101,7 +102,7 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
     }
 
 
-    void execute_compute_shader( const std::function<void( VkCommandBuffer )>& record_commands ) {
+    void execute_compute_shader( const std::function<void( aloe::CommandList& )>& record_commands ) {
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
         const auto compute_queue = device_->queues_by_capability( VK_QUEUE_COMPUTE_BIT ).front();
@@ -130,7 +131,15 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
         ASSERT_EQ( vkBeginCommandBuffer( command_buffer, &begin_info ), VK_SUCCESS )
             << "Failed to begin command buffer.";
 
-        record_commands( command_buffer );
+        {
+            aloe::SimulationState sim_state{ .sim_index = 0, .time_since_epoch = 0.0f, .delta_time = 1.0f / 60.0f };
+            aloe::CommandList cmd_list( *pipeline_manager_,
+                                        *resource_manager_,
+                                        "ComputeTest",
+                                        command_buffer,
+                                        sim_state );
+            record_commands( cmd_list );
+        }
 
         ASSERT_EQ( vkEndCommandBuffer( command_buffer ), VK_SUCCESS ) << "Failed to end command buffer.";
 
@@ -239,8 +248,11 @@ TEST_F( PipelineManagerTestFixture, Binding_FreedResourceErrorsOnBind ) {
     resource_manager_->free_buffer( buffer );
 
     // Execute should generate error but not crash
-    execute_compute_shader(
-        [&]( VkCommandBuffer cmd ) { EXPECT_FALSE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *handle );
+        auto result = scope.dispatch( 1, 1, 1 );
+        EXPECT_TRUE( result.has_value() );
+    } );
 }
 
 TEST_F( PipelineManagerTestFixture, Binding_MultipleResourcesSameSlot ) {
@@ -291,8 +303,11 @@ TEST_F( PipelineManagerTestFixture, Binding_ResourceVersionValidation ) {
     auto new_buffer = create_and_upload_buffer( "NewVersionBuffer", { 4.0f, 5.0f, 6.0f } );
 
     // Execute should fail or generate error about invalid resource version
-    execute_compute_shader(
-        [&]( VkCommandBuffer cmd ) { EXPECT_FALSE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *handle );
+        auto result = scope.dispatch( 1, 1, 1 );
+        EXPECT_TRUE( result.has_value() );
+    } );
 
     // Binding the new buffer should succeed
     EXPECT_TRUE( pipeline_manager_->set_uniform( buf_uniform.set_value( new_buffer ),
@@ -300,8 +315,11 @@ TEST_F( PipelineManagerTestFixture, Binding_ResourceVersionValidation ) {
 
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader(
-        [&]( VkCommandBuffer cmd ) { EXPECT_TRUE( pipeline_manager_->bind_pipeline( *handle, cmd ) ); } );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *handle );
+        auto result = scope.dispatch( 1, 1, 1 );
+        EXPECT_FALSE( result.has_value() );
+    } );
 }
 
 //------------------------------------------------------------------------------
@@ -466,9 +484,9 @@ TEST_F( PipelineManagerTestFixture, Uniform_BasicCompute ) {
 
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *pipeline_handle );
+        EXPECT_EQ( scope.dispatch( 1, 1, 1 ), std::nullopt );// no error
     } );
 
     std::vector<uint32_t> result_data( 2 );
@@ -505,9 +523,9 @@ TEST_F( PipelineManagerTestFixture, Uniform_StructType ) {
     pipeline_manager_->set_uniform( h_outbuf.set_value( outbuf ), aloe::usage( outbuf, aloe::ComputeStorageWrite ) );
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *pipeline_handle );
+        EXPECT_EQ( scope.dispatch( 1, 1, 1 ), std::nullopt );// no error
     } );
 
     std::vector<uint32_t> result_data( 2 );
@@ -537,9 +555,9 @@ TEST_F( PipelineManagerTestFixture, Uniform_PersistenceAcrossDispatches ) {
     pipeline_manager_->set_uniform( h_outbuf.set_value( outbuf ), aloe::usage( outbuf, aloe::ComputeStorageWrite ) );
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *pipeline_handle );
+        EXPECT_EQ( scope.dispatch( 1, 1, 1 ), std::nullopt );// no error
     } );
 
     std::vector<uint32_t> result_data( 1 );
@@ -547,9 +565,9 @@ TEST_F( PipelineManagerTestFixture, Uniform_PersistenceAcrossDispatches ) {
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 1.5f );
 
     pipeline_manager_->set_uniform( h_myval.set_value( 7.25f ) );
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( *pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( *pipeline_handle );
+        EXPECT_EQ( scope.dispatch( 1, 1, 1 ), std::nullopt );// no error
     } );
     resource_manager_->read_from_buffer( outbuf, result_data.data(), sizeof( uint32_t ) );
     EXPECT_FLOAT_EQ( std::bit_cast<float>( result_data[0] ), 7.25f );
@@ -795,9 +813,9 @@ TEST_F( PipelineManagerTestFixture, E2E_BufferDataModification ) {
                                     aloe::usage( buffer_handle, aloe::ComputeSampledRead ) );
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( pipeline_handle );
+        EXPECT_FALSE( scope.dispatch( 1, 1, 1 ).has_value() );
     } );
 
     std::vector<float> readback_data( num_elements );
@@ -862,9 +880,9 @@ TEST_F( PipelineManagerTestFixture, E2E_ThreeBufferElementWiseMultiply ) {
 
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
-        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, 1, 1 );
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
+        auto scope = cmd_list.bind_pipeline( pipeline_handle );
+        EXPECT_FALSE( scope.dispatch( 1, 1, 1 ).has_value() );
     } );
 
     std::vector<float> readback_data( num_elements );
@@ -915,7 +933,7 @@ TEST_F( PipelineManagerTestFixture, E2E_ImageProcedural ) {
                                     aloe::usage( image, aloe::ComputeStorageWrite ) );
     pipeline_manager_->bind_slots();
 
-    execute_compute_shader( [&]( VkCommandBuffer cmd ) {
+    execute_compute_shader( [&]( aloe::CommandList& cmd_list ) {
         VkImageMemoryBarrier2KHR barrier{ .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2_KHR,
                                           .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
                                           .srcAccessMask = VK_ACCESS_2_NONE,
@@ -936,10 +954,10 @@ TEST_F( PipelineManagerTestFixture, E2E_ImageProcedural ) {
                                           .imageMemoryBarrierCount = 1,
                                           .pImageMemoryBarriers = &barrier };
 
-        vkCmdPipelineBarrier2KHR( cmd, &dependency_info );
+        cmd_list.pipeline_barrier( dependency_info );
 
-        pipeline_manager_->bind_pipeline( pipeline_handle, cmd );
-        vkCmdDispatch( cmd, 1, image_size, 1 );
+        auto scope = cmd_list.bind_pipeline( pipeline_handle );
+        EXPECT_FALSE( scope.dispatch( 1, image_size, 1 ).has_value() );
 
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
@@ -948,7 +966,7 @@ TEST_F( PipelineManagerTestFixture, E2E_ImageProcedural ) {
         barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        vkCmdPipelineBarrier2KHR( cmd, &dependency_info );
+        cmd_list.pipeline_barrier( dependency_info );
     } );
 
     std::vector<float> readback_data( total_pixels * 4 );

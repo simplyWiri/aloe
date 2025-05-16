@@ -122,6 +122,7 @@ public:
 
     VkBuffer get_buffer( BufferHandle handle ) const;
     VkImage get_image( ImageHandle handle ) const;
+    VkImageView get_image_view( const ResourceUsage& usage ) const;
 
     void free_buffer( BufferHandle handle );
     void free_image( ImageHandle handle );

@@ -451,6 +451,12 @@ VkImage ResourceManager::get_image( ImageHandle handle ) const {
     return iter == images_.end() ? VK_NULL_HANDLE : iter->second.resource;
 }
 
+VkImageView ResourceManager::get_image_view( const ResourceUsage& usage ) const {
+    assert( std::holds_alternative<ImageHandle>( usage.resource ) );
+    const auto* img = find_image(std::get<ImageHandle>( usage.resource ));
+    return img ? img->bound_resources.at( usage ).view : VK_NULL_HANDLE;
+}
+
 void ResourceManager::free_buffer( BufferHandle handle ) {
     const auto iter = buffers_.find( handle );
     assert( iter != buffers_.end() );

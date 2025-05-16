@@ -23,6 +23,7 @@ struct PreprocessorMacroDesc;
 namespace aloe {
 class Device;
 class ResourceManager;
+class BoundPipelineScope;
 
 struct ShaderCompileInfo {
     std::string name;
@@ -48,6 +49,7 @@ struct SlangFilesystem;
 
 class PipelineManager {
     friend class Device;
+    friend class BoundPipelineScope;
     // Represents a shader file on disk, that has been linked to its dependencies, but has not yet been
     // compiled for a particular entry point, you need an `entry_point` name to turn this into a
     // `CompiledShaderState` object.
@@ -169,9 +171,6 @@ public:
     uint64_t get_pipeline_version( PipelineHandle ) const;
     const std::vector<uint32_t>& get_pipeline_spirv( PipelineHandle ) const;
 
-    // todo: temporary API for binding a pipeline
-    bool bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
-
     template<typename T>
         requires( std::is_standard_layout_v<T> )
     ShaderUniform<T> get_uniform_handle( PipelineHandle h, std::string_view name ) const {
@@ -196,7 +195,7 @@ public:
 
     template<typename T>
         requires( std::is_same_v<T, BufferHandle> || std::is_same_v<T, ImageHandle> )
-    bool set_uniform( const ShaderUniform<T>& uniform, ResourceUsage usage ) {
+    bool set_uniform( const ShaderUniform<T>& uniform, const ResourceUsage& usage ) {
         assert( uniform.data.has_value() && "Attempting to set UniformBlock from ShaderUniform without data." );
         assert( std::visit( [&]( auto& r ) { return r == *uniform.data; }, usage.resource ) );
 
@@ -222,8 +221,17 @@ public:
 
     void bind_slots() const;
 
+protected:
+    PipelineManager( Device& device, ResourceManager& resource_manager, std::vector<std::string> root_paths );
+
+    // Validates resources included in bound uniforms, sets push constant state, and binds the pipeline
+    bool bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
+    bool is_graphics_pipeline( PipelineHandle handle ) const;
+
 private:
-    // We need to rebuild our session when we change defines (as we ensure that all shaders are compiled with the same set of defines)
+    PipelineState* get_pipeline_state( PipelineHandle handle );
+    const PipelineState* get_pipeline_state( PipelineHandle handle ) const;
+
     template<typename PipelineInfoT>
     PipelineState& get_pipeline_state( const PipelineInfoT& pipeline_info ) {
         auto iter = std::ranges::find_if( pipelines_, [&]( const PipelineState& result ) {
@@ -239,6 +247,7 @@ private:
         }
     }
 
+    // We need to rebuild our session when we change defines (as we ensure that all shaders are compiled with the same set of defines)
     Slang::ComPtr<slang::ISession> get_session();
     ShaderState& get_shader_state( const ShaderCompileInfo& path );
 
@@ -254,9 +263,6 @@ private:
     std::expected<CompiledShaderState, std::string> get_compiled_shader( const ShaderCompileInfo& info );
     std::expected<UniformBlock, std::string> get_uniform_block( const std::vector<CompiledShaderState>& shaders );
     std::expected<VkPipelineLayout, std::string> get_pipeline_layout( const std::vector<CompiledShaderState>& shaders );
-
-protected:
-    PipelineManager( Device& device, ResourceManager& resource_manager, std::vector<std::string> root_paths );
 };
 
 }// namespace aloe

@@ -2,6 +2,7 @@
 add_executable(core_tests
     core/device_tests.cpp
     core/resource_manager_tests.cpp
+    core/command_list_tests.cpp
 )
 
 add_executable(window_tests

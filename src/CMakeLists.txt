@@ -33,11 +33,13 @@ aloe_add_library(aloe
         core/PipelineManager.h
         core/ResourceManager.h
         core/Swapchain.h
+        core/CommandList.h
     SOURCES
         core/Device.cpp
         core/PipelineManager.cpp
         core/ResourceManager.cpp
         core/Swapchain.cpp
+        core/CommandList.cpp
     LINK_AGAINST
         glfw
         vma
