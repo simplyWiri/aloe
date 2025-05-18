@@ -67,6 +67,9 @@ public:
 
     GLFWwindow* window() const { return window_; }
 
+    // Returns the current framebuffer extent (width, height)
+    VkExtent2D get_extent() const { return capabilities_.currentExtent; }
+
 protected:
     void resize();
     VkResult load_surface_capabilities();

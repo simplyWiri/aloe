@@ -107,13 +107,28 @@ TEST_F( SwapchainTestFixture, WindowResizes ) {
     int width, height;
     glfwGetWindowSize( window, &width, &height );
 
-    // Resize the window, from the basic width, down to zero on one axis.
+    int fb_width, fb_height;
+    glfwGetFramebufferSize( window, &fb_width, &fb_height );
+
+    VkExtent2D initial_extent = swapchain->get_extent();
+    EXPECT_EQ( initial_extent.width, static_cast<uint32_t>( fb_width ) );
+    EXPECT_EQ( initial_extent.height, static_cast<uint32_t>( fb_height ) );
+
     int i = 1;
     while ( !swapchain->poll_events() ) {
         const auto next_width = std::max( 0, width - ( 10 * i++ ) );
         glfwSetWindowSize( window, next_width, height );
 
-        if ( next_width == 0 ) { glfwSetWindowShouldClose( window, GLFW_TRUE ); }
+        // After resize, extent should match framebuffer size (unless minimized)
+        if ( next_width > 0 ) {
+            glfwGetFramebufferSize( window, &fb_width, &fb_height );
+
+            const VkExtent2D extent = swapchain->get_extent();
+            EXPECT_EQ( extent.width, static_cast<uint32_t>( fb_width ) );
+            EXPECT_EQ( extent.height, static_cast<uint32_t>( fb_height ) );
+        } else if ( next_width == 0 ) {
+            glfwSetWindowShouldClose( window, GLFW_TRUE );
+        }
     }
 }
 
@@ -148,6 +163,16 @@ TEST_F( SwapchainTestFixture, AcquireNextImageFailsDueToResizeSucceeds ) {
 
             const auto render_target = swapchain->acquire_next_image( image_avail_semaphore );
             ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
+
+            // Extent should match restored framebuffer size
+            {
+                int fb_width, fb_height;
+                glfwGetFramebufferSize( swapchain->window(), &fb_width, &fb_height );
+
+                const VkExtent2D extent = swapchain->get_extent();
+                EXPECT_EQ( extent.width, static_cast<uint32_t>( fb_width ) );
+                EXPECT_EQ( extent.height, static_cast<uint32_t>( fb_height ) );
+            }
         }
 
         vkDeviceWaitIdle( device_->device() );
