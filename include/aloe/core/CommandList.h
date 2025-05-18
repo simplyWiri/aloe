@@ -19,9 +19,9 @@ class ResourceManager;
 struct SimulationState {
     // Monotonically increasing number each time `.execute()` is called on a task graph
     uint64_t sim_index;
-    float time_since_epoch;
-    // Time since the last tick as milliseconds, 0 for the first tick.
-    float delta_time;
+    std::chrono::microseconds time_since_epoch;
+    // Time since the last tick as microseconds, 0 for the first tick.
+    std::chrono::microseconds delta_time;
 };
 
 
@@ -77,7 +77,7 @@ public:
                 ResourceManager& resource_manager,
                 const char* section_name,
                 VkCommandBuffer command_buffer,
-                SimulationState simulation_state);
+                const SimulationState& simulation_state);
     ~CommandList();
 
     CommandList(const CommandList&) = delete;
@@ -95,14 +95,19 @@ public:
 
     void pipeline_barrier(const VkDependencyInfo& dependency_info ) const;
 
+    // Expose the bound pipelines for inspection (e.g. by TaskGraph)
+    const std::vector<PipelineHandle>& bound_pipelines() const;
+
 private:
     friend class BoundPipelineScope;
 
     PipelineManager& pipeline_manager_;
     ResourceManager& resource_manager_;
-    SimulationState simulation_state_;
+    const SimulationState& simulation_state_;
     VkCommandBuffer command_buffer_;
     bool in_renderpass_;
+    // Track all pipelines bound during this command list's lifetime
+    std::vector<PipelineHandle> bound_pipelines_;
 };
 
 }// namespace aloe

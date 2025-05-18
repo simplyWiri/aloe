@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+using namespace std::chrono_literals;
+
 class CommandListTestFixture : public ::testing::Test {
 protected:
     std::shared_ptr<aloe::MockLogger> mock_logger_;
@@ -15,7 +17,7 @@ protected:
     VkCommandBuffer command_buffer_;
     VkCommandPool command_pool_;
 
-    aloe::SimulationState sim_state_{ .sim_index = 0, .time_since_epoch = 0.0f, .delta_time = 1.0f / 60.0f };
+    aloe::SimulationState sim_state_{ .sim_index = 0, .time_since_epoch = 0us, .delta_time = 0us };
 
     void SetUp() override {
         mock_logger_ = std::make_shared<aloe::MockLogger>();
@@ -30,7 +32,7 @@ protected:
         VkCommandPoolCreateInfo pool_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = device_->queues_by_capability( VK_QUEUE_GRAPHICS_BIT )[0].family_index,
+            .queueFamilyIndex = device_->find_queues( VK_QUEUE_GRAPHICS_BIT )[0].family_index,
         };
 
         vkCreateCommandPool( device_->device(), &pool_info, nullptr, &command_pool_ );
@@ -120,8 +122,8 @@ TEST_F( CommandListTestFixture, SimulationStateAccess_MatchesInput ) {
     aloe::CommandList cmd_list( *pipeline_manager_, *resource_manager_, "Test Section", command_buffer_, sim_state_ );
     const auto& state = cmd_list.state();
     EXPECT_EQ( state.sim_index, sim_state_.sim_index );
-    EXPECT_FLOAT_EQ( state.time_since_epoch, sim_state_.time_since_epoch );
-    EXPECT_FLOAT_EQ( state.delta_time, sim_state_.delta_time );
+    EXPECT_EQ( state.time_since_epoch, sim_state_.time_since_epoch );
+    EXPECT_EQ( state.delta_time, sim_state_.delta_time );
 }
 
 //------------------------------------------------------------------------------

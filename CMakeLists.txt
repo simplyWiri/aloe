@@ -18,4 +18,3 @@ if(ALOE_ENABLE_TESTS)
     enable_testing()
     add_subdirectory(test)
 endif()
-

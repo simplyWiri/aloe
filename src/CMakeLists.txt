@@ -29,17 +29,19 @@ target_compile_options(vma PRIVATE -w) # vma does not build cleanly.
 
 aloe_add_library(aloe
     HEADERS
+        core/CommandList.h
         core/Device.h
         core/PipelineManager.h
         core/ResourceManager.h
         core/Swapchain.h
-        core/CommandList.h
-    SOURCES
+        core/TaskGraph.cpp
+SOURCES
+        core/CommandList.cpp
         core/Device.cpp
         core/PipelineManager.cpp
         core/ResourceManager.cpp
         core/Swapchain.cpp
-        core/CommandList.cpp
+        core/TaskGraph.cpp
     LINK_AGAINST
         glfw
         vma

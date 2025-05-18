@@ -50,6 +50,7 @@ struct SlangFilesystem;
 class PipelineManager {
     friend class Device;
     friend class BoundPipelineScope;
+    friend class TaskGraph;
     // Represents a shader file on disk, that has been linked to its dependencies, but has not yet been
     // compiled for a particular entry point, you need an `entry_point` name to turn this into a
     // `CompiledShaderState` object.
@@ -227,7 +228,8 @@ protected:
     // Validates resources included in bound uniforms, sets push constant state, and binds the pipeline
     bool bind_pipeline( PipelineHandle handle, VkCommandBuffer buffer ) const;
     bool is_graphics_pipeline( PipelineHandle handle ) const;
-
+    const std::vector<ResourceUsage>& get_bound_resources(PipelineHandle handle) const;
+    
 private:
     PipelineState* get_pipeline_state( PipelineHandle handle );
     const PipelineState* get_pipeline_state( PipelineHandle handle ) const;

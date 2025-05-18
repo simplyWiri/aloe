@@ -12,6 +12,8 @@
 
 #include <spirv-tools/libspirv.hpp>
 
+using namespace std::chrono_literals;
+
 class PipelineManagerTestFixture : public ::testing::Test {
 protected:
     std::shared_ptr<aloe::MockLogger> mock_logger_;
@@ -105,7 +107,7 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
     void execute_compute_shader( const std::function<void( aloe::CommandList& )>& record_commands ) {
         VkCommandPool command_pool = VK_NULL_HANDLE;
         VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-        const auto compute_queue = device_->queues_by_capability( VK_QUEUE_COMPUTE_BIT ).front();
+        const auto compute_queue = device_->find_queues( VK_QUEUE_COMPUTE_BIT ).front();
 
         VkCommandPoolCreateInfo pool_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -132,7 +134,7 @@ void {}(uint3 id : SV_DispatchThreadID{}) {{
             << "Failed to begin command buffer.";
 
         {
-            aloe::SimulationState sim_state{ .sim_index = 0, .time_since_epoch = 0.0f, .delta_time = 1.0f / 60.0f };
+            aloe::SimulationState sim_state{ .sim_index = 0, .time_since_epoch = 0us, .delta_time = 5us };
             aloe::CommandList cmd_list( *pipeline_manager_,
                                         *resource_manager_,
                                         "ComputeTest",

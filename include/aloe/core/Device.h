@@ -15,6 +15,7 @@ class PipelineManager;
 class ResourceManager;
 struct SwapchainSettings;
 class Swapchain;
+class TaskGraph;
 
 struct DeviceSettings {
     const char* name = "aloe application";
@@ -93,11 +94,12 @@ public:
     VkDevice device() const { return device_; }
     VmaAllocator allocator() const { return allocator_; }
     bool validation_enabled() const { return enable_validation_; }
-    std::vector<Queue> queues_by_capability( VkQueueFlagBits capability ) const;
+    std::vector<Queue> find_queues( VkQueueFlagBits capability ) const;
 
     std::shared_ptr<PipelineManager> make_pipeline_manager( const std::vector<std::string>& root_paths );
     std::shared_ptr<ResourceManager> make_resource_manager();
     std::shared_ptr<Swapchain> make_swapchain( const SwapchainSettings& settings );
+    std::shared_ptr<TaskGraph> make_task_graph();
     void immediate_submit( const Queue& queue, const std::function<void( VkCommandBuffer )>& work_fn );
 
     static const DebugInformation& debug_info() { return debug_info_; }

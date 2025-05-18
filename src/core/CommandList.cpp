@@ -70,7 +70,7 @@ CommandList::CommandList( PipelineManager& pipeline_manager,
                           ResourceManager& resource_manager,
                           const char* section_name,
                           VkCommandBuffer command_buffer,
-                          SimulationState simulation_state )
+                          const SimulationState& simulation_state )
     : pipeline_manager_( pipeline_manager )
     , resource_manager_( resource_manager )
     , simulation_state_( simulation_state )
@@ -98,6 +98,8 @@ const SimulationState& CommandList::state() const {
 }
 
 BoundPipelineScope CommandList::bind_pipeline( PipelineHandle handle ) {
+    // Record the pipeline handle for later inspection
+    bound_pipelines_.emplace_back(handle);
     return { *this, handle, pipeline_manager_, in_renderpass_ };
 }
 
@@ -156,6 +158,10 @@ std::optional<std::string> CommandList::end_renderpass() {
 
 void CommandList::pipeline_barrier( const VkDependencyInfo& dependency_info ) const {
     vkCmdPipelineBarrier2KHR( command_buffer_, &dependency_info );
+}
+
+const std::vector<PipelineHandle>& CommandList::bound_pipelines() const {
+    return bound_pipelines_;
 }
 
 }// namespace aloe

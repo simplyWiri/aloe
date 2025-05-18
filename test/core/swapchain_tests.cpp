@@ -67,7 +67,7 @@ protected:
         VkCommandPoolCreateInfo pool_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = device_->queues_by_capability( VK_QUEUE_GRAPHICS_BIT ).front().family_index,
+            .queueFamilyIndex = device_->find_queues( VK_QUEUE_GRAPHICS_BIT ).front().family_index,
         };
 
         vkCreateCommandPool( device_->device(), &pool_info, nullptr, &pool_ );
@@ -165,7 +165,7 @@ TEST_F( SwapchainTestFixture, PresentSucceeds ) {
     ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
 
     // Retrieve graphics queue for presentation
-    const auto queue = device_->queues_by_capability( VK_QUEUE_GRAPHICS_BIT ).front();
+    const auto queue = device_->find_queues( VK_QUEUE_GRAPHICS_BIT ).front();
 
     transition_to_presentable( render_target->image );
 
@@ -210,7 +210,7 @@ TEST_F( SwapchainTestFixture, PresentFailsDueToResize ) {
     ASSERT_TRUE( render_target.has_value() ) << "Failed to acquire the image";
 
     // Retrieve graphics queue for presentation
-    const auto queue = device_->queues_by_capability( VK_QUEUE_GRAPHICS_BIT ).front();
+    const auto queue = device_->find_queues( VK_QUEUE_GRAPHICS_BIT ).front();
 
     transition_to_presentable( render_target->image );
 

@@ -233,7 +233,7 @@ VkDeviceSize ResourceManager::upload_to_image( ImageHandle handle, const void* d
         upload_to_buffer( staging_buffer, data, size );
 
         // Get transfer queue
-        const auto transfer_queues = device_.queues_by_capability( VK_QUEUE_TRANSFER_BIT );
+        const auto transfer_queues = device_.find_queues( VK_QUEUE_TRANSFER_BIT );
         if ( transfer_queues.empty() ) {
             log_write( LogLevel::Error, "No transfer queue available for image upload" );
             free_buffer( staging_buffer );
@@ -319,7 +319,7 @@ VkDeviceSize ResourceManager::read_from_image( ImageHandle handle, void* out_dat
             .name = "Image Download Staging Buffer",
         } );
 
-        const auto transfer_queues = device_.queues_by_capability( VK_QUEUE_TRANSFER_BIT );
+        const auto transfer_queues = device_.find_queues( VK_QUEUE_TRANSFER_BIT );
         if ( transfer_queues.empty() ) {
             log_write( LogLevel::Error, "No transfer queue available for image download" );
             free_buffer( staging_buffer );

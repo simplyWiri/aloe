@@ -739,4 +739,10 @@ PipelineManager::get_pipeline_layout( const std::vector<CompiledShaderState>& sh
     return layout;
 }
 
+const std::vector<ResourceUsage>& PipelineManager::get_bound_resources(PipelineHandle handle) const {
+    const auto* state = get_pipeline_state(handle);
+    static const std::vector<ResourceUsage> empty;
+    return state ? state->bound_resources : empty;
+}
+
 }// namespace aloe
